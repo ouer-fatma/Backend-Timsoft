@@ -33,30 +33,48 @@ const loginUser = async (req, res) => {
 
   try {
     const { DB_USER, DB_PASSWORD, DB_SERVER, DB_DATABASE, DB_PORT } = process.env;
-    const config = { /* ... votre configuration SQL ... */ };
-    
+    const config = {
+      user: DB_USER,
+      password: DB_PASSWORD,
+      server: DB_SERVER,
+      database: DB_DATABASE,
+      port: parseInt(DB_PORT),
+      options: { encrypt: true, trustServerCertificate: true }
+    };
+
     await sql.connect(config);
     const request = new sql.Request();
-    const result = await request.query('SELECT * FROM Utilisateur WHERE Email = @Email');
-    const user = result.recordset[0];
-
-    if (!user) return res.status(404).json({ message: 'Utilisateur non trouvé.' });
+    request.input('Email', sql.VarChar, email);
     
-    const isPasswordValid = await bcrypt.compare(motDePasse, user.MotDePasse);
-    if (!isPasswordValid) return res.status(401).json({ message: 'Mot de passe incorrect.' });
+    const result = await request.query('SELECT * FROM Utilisateur WHERE Email = @Email');
+    const utilisateur = result.recordset[0];
+
+    if (!utilisateur) {
+      return res.status(404).json({ message: 'Utilisateur non trouvé.' });
+    }
+
+    const passwordMatch = await bcrypt.compare(motDePasse, utilisateur.MotDePasse);
+    if (!passwordMatch) {
+      return res.status(401).json({ message: 'Mot de passe incorrect.' });
+    }
 
     const token = jwt.sign(
-      { id: user.ID_Utilisateur, email: user.Email, role: user.Role },
+      { id: utilisateur.ID_Utilisateur, email: utilisateur.Email, role: utilisateur.Role },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
 
+    console.log("Email reçu:", email);
+    console.log("Utilisateur trouvé:", utilisateur);
+    console.log("Mot de passe correct:", passwordMatch);
+
     res.status(200).json({ message: 'Connexion réussie !', token });
+
   } catch (err) {
     console.error('Erreur lors de la connexion :', err);
     res.status(500).json({ message: 'Erreur lors de la connexion.' });
   } finally {
-    sql.close();
+    await sql.close();
   }
 };
 
