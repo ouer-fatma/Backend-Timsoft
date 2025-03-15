@@ -1,7 +1,6 @@
 require("dotenv").config();
 const express = require("express");
 const { connectDB } = require("./db");
-const tiersRoutes = require("./controllers/tiersController");
 const authRoutes = require('./routes/authRoutes'); // Modification ici : chemin vers le fichier de routes
 const app = express();
 const port = process.env.PORT || 3000;
@@ -12,7 +11,6 @@ app.use(express.json());
 connectDB();
 
 // Utilisation des routes
-app.use("/tiers", tiersRoutes);
 app.use('/auth', authRoutes); // Plus besoin d'appliquer validateRegister ici
 
 app.listen(port, () => {
