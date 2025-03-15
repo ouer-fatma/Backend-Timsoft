@@ -1,33 +1,27 @@
-require('dotenv').config(); // Charger les variables d'environnement
-const sql = require('mssql'); // Importer mssql
+require('dotenv').config();
+const sql = require('mssql');
 
-// Configuration de la connexion
 const config = {
   user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD || '',
+  password: process.env.DB_PASSWORD,
   server: process.env.DB_SERVER,
   database: process.env.DB_DATABASE,
   port: parseInt(process.env.DB_PORT, 10),
   options: {
-    encrypt: false, // Désactiver SSL (utile pour éviter certains bugs)
-    trustServerCertificate: true // Nécessaire pour les connexions locales
-  }
+    encrypt: false,
+    trustServerCertificate: true,
+  },
 };
 
-// Fonction pour tester la connexion
-async function connectDB() {
-  try {
-    await sql.connect(config);
-    console.log("✅ Connexion réussie à la base de données !");
-    const result = await sql.query("SELECT GETDATE() AS date_now"); // Test avec une requête simple
-    console.log("📅 Date actuelle du serveur SQL :", result.recordset[0].date_now);
-  } catch (err) {
-    console.error("❌ Erreur de connexion :", err);
-  } finally {
-    sql.close(); // Fermer la connexion après usage
-  }
-}
+const poolPromise = new sql.ConnectionPool(config)
+  .connect()
+  .then(pool => {
+    console.log('✅ Connexion réussie à la base de données.');
+    return pool;
+  })
+  .catch(err => {
+    console.error('❌ Erreur lors de la connexion à la base de données:', err);
+    process.exit(1);
+  });
 
-
-// Exporter la fonction pour pouvoir l'utiliser ailleurs
-module.exports = { connectDB };
+module.exports = { sql, poolPromise };
