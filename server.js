@@ -3,7 +3,7 @@ const express = require("express");
 const authRoutes = require('./routes/authRoutes');
 const articleRoutes = require('./routes/articleRoutes');
 const userRoutes = require('./routes/userRoutes');
-
+const orderRoutes = require('./routes/orderRoutes');
 const { poolPromise } = require('./db');
 
 const app = express();
@@ -25,6 +25,7 @@ poolPromise
 app.use('/auth', authRoutes);
 app.use('/articles', articleRoutes);
 app.use('/users', userRoutes); // ← Correct and present!
+app.use('/orders', orderRoutes);
 // Add this explicit temporary route for testing
 app.get('/test', (req, res) => {
   res.status(200).json({ message: 'Route test fonctionne parfaitement !' });
@@ -34,3 +35,5 @@ app.get('/test', (req, res) => {
 app.listen(port, () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${port}`);
 });
+
+
