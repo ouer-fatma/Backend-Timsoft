@@ -7,11 +7,10 @@ const checkRole = require('../middlewares/checkRole');
 router.use(checkRole('user')); // ou checkRole('personnel_magasin') selon vos besoins
 
 router.get('/', orderController.getAllOrders);
-router.get('/:id', orderController.getOrderById);
+router.get('/:nature/:souche/:numero/:indice', orderController.getOrderById);
 router.post('/', orderController.createOrder);
-router.put('/:id', orderController.updateOrder);
-router.delete('/:id', orderController.deleteOrder);
-/*router.get('/latest', orderController.getLatestOrder);*/
+router.put('/:nature/:souche/:numero/:indice', orderController.updateOrder);
+router.delete('/:nature/:souche/:numero/:indice', orderController.deleteOrder);
 
 
 module.exports = router;
