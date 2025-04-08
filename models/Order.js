@@ -1,39 +1,46 @@
-const { sql, poolPromise } = require('../db');
+// 🆕 getOrderDetails avec LIGNE + ARTICLE + GL_NUMPIECE
+exports.getOrderDetails = async (req, res) => {
+  const { nature, souche, numero, indice } = req.params;
 
-class Order {
-  constructor(GP_NATUREPIECEG, GP_SOUCHE, GP_NUMERO, GP_INDICEG, GP_TIERS, GP_TOTALHT, GP_TOTALTTC, GP_DATECREATION, GP_DEPOT) {
-    this.GP_NATUREPIECEG = GP_NATUREPIECEG;
-    this.GP_SOUCHE = GP_SOUCHE;
-    this.GP_NUMERO = GP_NUMERO;
-    this.GP_INDICEG = GP_INDICEG;
-    this.GP_TIERS = GP_TIERS;
-    this.GP_TOTALHT = GP_TOTALHT;
-    this.GP_TOTALTTC = GP_TOTALTTC;
-    this.GP_DATECREATION = GP_DATECREATION;
-    this.GP_DEPOT = GP_DEPOT;
-  }
-
-  async save() {
+  try {
     const pool = await poolPromise;
-    const result = await pool.request()
-      .input('GP_NATUREPIECEG', sql.NVarChar(3), this.GP_NATUREPIECEG)
-      .input('GP_SOUCHE', sql.NVarChar(6), this.GP_SOUCHE)
-      .input('GP_NUMERO', sql.Int, this.GP_NUMERO)
-      .input('GP_INDICEG', sql.Int, this.GP_INDICEG)
-      .input('GP_TIERS', sql.NVarChar(17), this.GP_TIERS)
-      .input('GP_TOTALHT', sql.Numeric(19,4), this.GP_TOTALHT)
-      .input('GP_TOTALTTC', sql.Numeric(19,4), this.GP_TOTALTTC)
-      .input('GP_DATECREATION', sql.DateTime, this.GP_DATECREATION)
-      .input('GP_DEPOT', sql.NVarChar(6), this.GP_DEPOT)
+
+    const pieceResult = await pool.request()
+      .input('nature', sql.NVarChar(3), nature)
+      .input('souche', sql.NVarChar(6), souche)
+      .input('numero', sql.Int, parseInt(numero))
+      .input('indice', sql.NVarChar(3), indice)
       .query(`
-        INSERT INTO PIECE (GP_NATUREPIECEG, GP_SOUCHE, GP_NUMERO, GP_INDICEG, GP_TIERS, GP_TOTALHT, GP_TOTALTTC, GP_DATECREATION, GP_DEPOT)
-        VALUES (@GP_NATUREPIECEG, @GP_SOUCHE, @GP_NUMERO, @GP_INDICEG, @GP_TIERS, @GP_TOTALHT, @GP_TOTALTTC, @GP_DATECREATION, @GP_DEPOT)
+        SELECT * FROM PIECE
+        WHERE GP_NATUREPIECEG=@nature AND GP_SOUCHE=@souche AND GP_NUMERO=@numero AND GP_INDICEG=@indice
       `);
 
-    return result.rowsAffected;
+    if (pieceResult.recordset.length === 0) {
+      return res.status(404).json({ message: 'Commande non trouvée.' });
+    }
+
+    const commande = pieceResult.recordset[0];
+
+    const lignesResult = await pool.request()
+      .input('nature', sql.NVarChar(3), nature)
+      .input('souche', sql.NVarChar(6), souche)
+      .input('numero', sql.Int, parseInt(numero))
+      .input('indice', sql.NVarChar(3), indice)
+      .query(`
+        SELECT L.*, A.GA_LIBELLE, A.GA_PVTTC
+        FROM LIGNE L
+        LEFT JOIN ARTICLE A ON A.GA_CODEARTICLE = L.GL_ARTICLE
+        WHERE L.GL_NATUREPIECEG=@nature AND L.GL_SOUCHE=@souche AND L.GL_NUMERO=@numero AND L.GL_INDICEG=@indice
+      `);
+
+    const lignes = lignesResult.recordset.map(l => ({
+      ...l,
+      GL_TOTALLIGNE: (l.GL_QTEFACT || 0) * (l.GA_PVTTC || 0),
+      GL_NUMPIECE: `${nature}/${souche}/${numero}/${indice}`
+    }));
+
+    res.status(200).json({ commande, lignes });
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur lors de la récupération des détails de la commande.', error: err.message });
   }
-}
-
-module.exports = Order;
-
-  
+};
