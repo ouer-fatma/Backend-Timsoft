@@ -2,20 +2,12 @@ const express = require('express');
 const router = express.Router();
 const articleController = require('../controllers/articleController');
 
-// GET all articles
+// Routes
 router.get('/', articleController.getAllArticles);
-
-
-// GET article by code
-router.get('/:codeArticle', articleController.getArticleByCode);
-
-// Create new article
+router.get('/:gaArticle', articleController.getArticleByGA); // identifiant GA_ARTICLE (VARCHAR)
 router.post('/', articleController.createArticle);
-
-// Update an article
-router.put('/:codeArticle', articleController.updateArticle);
-
-// Delete an article
-router.delete('/:codeArticle', articleController.deleteArticle);
+router.put('/:id', articleController.updateArticle);
+router.delete('/:id', articleController.deleteArticle);
 
 module.exports = router;
+
