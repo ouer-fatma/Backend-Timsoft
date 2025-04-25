@@ -6,12 +6,16 @@ const config = {
   password: process.env.DB_PASSWORD,
   server: process.env.DB_SERVER,
   database: process.env.DB_DATABASE,
-  port: parseInt(process.env.DB_PORT, 10),
+  port: isNaN(parseInt(process.env.DB_PORT, 10)) ? 1433 : parseInt(process.env.DB_PORT, 10),
   options: {
-    encrypt: false,
+    encrypt: false, // à adapter selon l'environnement
     trustServerCertificate: true,
   },
+  connectionTimeout: 30000, // 30 secondes pour se connecter
+  requestTimeout: 30000,    // 30 secondes pour exécuter une requête
 };
+
+console.log('🔄 Tentative de connexion à la base de données...');
 
 const poolPromise = new sql.ConnectionPool(config)
   .connect()
@@ -21,7 +25,7 @@ const poolPromise = new sql.ConnectionPool(config)
   })
   .catch(err => {
     console.error('❌ Erreur lors de la connexion à la base de données:', err);
-    process.exit(1);
+    process.exit(1); // Stoppe le serveur si la connexion échoue
   });
 
 module.exports = { sql, poolPromise };

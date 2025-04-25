@@ -6,7 +6,7 @@ const userRoutes = require('./routes/userRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const { poolPromise } = require('./db');
 
-
+const stockRoutes = require('./routes/stockRoutes');
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -37,5 +37,5 @@ app.listen(port, () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${port}`);
 });
 
-
+app.use('/api', stockRoutes);
 

@@ -29,7 +29,7 @@ exports.getOrderDetails = async (req, res) => {
       .query(`
         SELECT L.*, A.GA_LIBELLE, A.GA_PVTTC
         FROM LIGNE L
-        LEFT JOIN ARTICLE A ON A.GA_CODEARTICLE = L.GL_ARTICLE
+        LEFT JOIN ARTICLE A ON A.GA_ARTICLE = L.GL_ARTICLE
         WHERE L.GL_NATUREPIECEG=@nature AND L.GL_SOUCHE=@souche AND L.GL_NUMERO=@numero AND L.GL_INDICEG=@indice
       `);
 
