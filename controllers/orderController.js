@@ -76,8 +76,8 @@ exports.getOrderDetails = async (req, res) => {
       `);
 
     const lignes = [];
+    let totalApresRemise = 0; // <-- Nouveau : total après remise
 
-    // 3. Appliquer les remises article/tiers
     for (const ligne of lignesResult.recordset) {
       const { GL_ARTICLE, GL_QTEFACT = 0, GA_PVTTC = 0 } = ligne;
 
@@ -103,10 +103,13 @@ exports.getOrderDetails = async (req, res) => {
 
       const remisePourcent = promo.MLR_REMISE || 0;
       const montantRemise = (GA_PVTTC * GL_QTEFACT * remisePourcent) / 100;
+      const totalLigneApresRemise = parseFloat((GA_PVTTC * GL_QTEFACT - montantRemise).toFixed(2));
+
+      totalApresRemise += totalLigneApresRemise; // <-- On additionne ligne par ligne
 
       lignes.push({
         ...ligne,
-        GL_TOTALLIGNE: parseFloat((GA_PVTTC * GL_QTEFACT - montantRemise).toFixed(2)),
+        GL_TOTALLIGNE: totalLigneApresRemise,
         GL_NUMPIECE: `${nature}/${souche}/${numero}/${indice}`,
         PROMO: {
           REMISE: `${remisePourcent}%`,
@@ -117,7 +120,12 @@ exports.getOrderDetails = async (req, res) => {
       });
     }
 
-    res.status(200).json({ commande, lignes });
+    res.status(200).json({
+      commande,
+      lignes,
+      TOTAL_APRES_REMISE: parseFloat(totalApresRemise.toFixed(2)) // <-- Ici on l'affiche dans la réponse
+    });
+
   } catch (err) {
     res.status(500).json({
       message: 'Erreur lors de la récupération des détails de la commande.',
