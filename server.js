@@ -6,10 +6,15 @@ const userRoutes = require('./routes/userRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const { poolPromise } = require('./db');
 
+
+const clickCollectRoutes = require('./routes/clickCollect');
 const stockRoutes = require('./routes/stockRoutes');
 const app = express();
 const port = process.env.PORT || 3000;
 
+const invoiceRoutes = require('./routes/invoice');
+
+const stockTransferRoutes = require('./routes/stockTransferRoutes');
 app.use(express.json());
 
 // Check database connection on startup
@@ -39,3 +44,10 @@ app.listen(port, () => {
 
 app.use('/api', stockRoutes);
 
+
+app.use('/api/invoice', invoiceRoutes);
+
+app.use('/api/stock-transfer', stockTransferRoutes);
+
+
+app.use('/click-collect', clickCollectRoutes);
