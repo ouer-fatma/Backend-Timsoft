@@ -1,3 +1,4 @@
+//server.js
 require("dotenv").config();
 const express = require("express");
 const authRoutes = require('./routes/authRoutes');
@@ -9,6 +10,9 @@ const { poolPromise } = require('./db');
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+const cors = require('cors');
+app.use(cors());
 
 app.use(express.json());
 
@@ -33,9 +37,10 @@ app.get('/test', (req, res) => {
 });
 
 
-app.listen(port, () => {
-  console.log(`🚀 Serveur démarré sur http://localhost:${port}`);
+app.listen(port, '0.0.0.0', () => {
+  console.log(`🚀 Serveur démarré sur http://0.0.0.0:${port}`);
 });
+
 
 
 

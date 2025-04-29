@@ -1,3 +1,4 @@
+//Order.js
 // 🆕 getOrderDetails avec LIGNE + ARTICLE + GL_NUMPIECE
 exports.getOrderDetails = async (req, res) => {
   const { nature, souche, numero, indice } = req.params;

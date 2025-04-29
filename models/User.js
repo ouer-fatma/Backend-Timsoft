@@ -1,3 +1,4 @@
+//User.js
 class User {
     constructor(nom, email, motDePasse, role = 'user') {
       this.nom = nom;

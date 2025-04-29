@@ -1,3 +1,4 @@
+//validateRegister
 function validateRegister(req, res, next) {
     const { nom, email, motDePasse } = req.body;
   

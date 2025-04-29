@@ -1,3 +1,4 @@
+//Article.js
 const sql = require('mssql');
 
 class Article {

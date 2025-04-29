@@ -1,7 +1,9 @@
+//authController
 const bcrypt = require('bcrypt');
 const sql = require('mssql');
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 
 // Contrôleur pour l'inscription
 const registerUser = async (req, res) => {
@@ -78,6 +80,83 @@ const loginUser = async (req, res) => {
   }
 };
 
+
+const googleSignIn = async (req, res) => {
+  const token = req.body.token;
+  const username = req.body.username;
+
+  const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+  try {
+    const ticket = await client.verifyIdToken({
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const email = payload.email;
+    const nom = username || payload.name || email.split('@')[0];
+
+    const config = {
+      user: process.env.DB_USER,
+      password: process.env.DB_PASSWORD,
+      server: process.env.DB_SERVER,
+      database: process.env.DB_DATABASE,
+      port: parseInt(process.env.DB_PORT),
+      options: { encrypt: true, trustServerCertificate: true }
+    };
+
+    await sql.connect(config);
+
+    const request = new sql.Request();
+    request.input('Email', sql.NVarChar, email);
+    const result = await request.query('SELECT * FROM Utilisateur WHERE Email = @Email');
+
+    let utilisateur = result.recordset[0];
+
+    if (!utilisateur) {
+      const insertRequest = new sql.Request();
+      insertRequest.input('Nom', sql.NVarChar, nom);
+      insertRequest.input('Email', sql.NVarChar, email);
+      insertRequest.input('MotDePasse', sql.NVarChar, bcrypt.hashSync('0000', 10));
+      insertRequest.input('Role', sql.NVarChar, 'client');
+      await insertRequest.query(`
+        INSERT INTO Utilisateur (Nom, Email, MotDePasse, Role)
+        VALUES (@Nom, @Email, @MotDePasse, @Role)
+      `);
+
+      const fetch = new sql.Request();
+      fetch.input('Email', sql.NVarChar, email);
+      const newResult = await fetch.query('SELECT * FROM Utilisateur WHERE Email = @Email');
+      utilisateur = newResult.recordset[0];
+    }
+
+    const jwtToken = jwt.sign(
+      { id: utilisateur.ID_Utilisateur, email: utilisateur.Email, role: utilisateur.Role },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    res.status(200).json({
+      message: 'Connexion Google réussie !',
+      token: jwtToken,
+      user: {
+        nom: utilisateur.Nom,
+        email: utilisateur.Email,
+        role: utilisateur.Role,
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur Google Sign-In:', error);
+    res.status(401).json({ message: 'Échec de la vérification Google.', error: error.message });
+  } finally {
+    sql.close();
+  }
+};
+
+
+
 // Contrôleurs pour les routes protégées
 const adminDashboard = (req, res) => res.json({ message: 'Bienvenue, Admin !' });
 const magasinDashboard = (req, res) => res.json({ message: 'Bienvenue, Personnel du Magasin !' });
@@ -90,3 +169,4 @@ module.exports = {
   magasinDashboard,
   clientDashboard
 };
+module.exports.googleSignIn = googleSignIn;
