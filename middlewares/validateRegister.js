@@ -1,10 +1,10 @@
 //validateRegister
 function validateRegister(req, res, next) {
-    const { nom, email, motDePasse } = req.body;
+  const { nom, prenom, email, motDePasse } = req.body;
   
-    if (!nom || !email || !motDePasse) {
-      return res.status(400).json({ message: 'Tous les champs sont obligatoires.' });
-    }
+  if (!nom || !prenom || !email || !motDePasse) {
+    return res.status(400).json({ message: 'Tous les champs sont obligatoires.' });
+  }
   
     // Valider l'email avec une regex simple
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

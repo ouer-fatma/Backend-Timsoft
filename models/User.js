@@ -1,11 +1,12 @@
 //User.js
 class User {
-    constructor(nom, email, motDePasse, role = 'user') {
-      this.nom = nom;
-      this.email = email;
-      this.motDePasse = motDePasse;
-      this.role = role;
-    }
+  constructor(nom, prenom, email, motDePasse, role = 'client') {
+    this.nom = nom;
+    this.prenom = prenom;
+    this.email = email;
+    this.motDePasse = motDePasse;
+    this.role = role;
+  }
   
     // Méthode pour insérer un utilisateur dans la base de données
     async save() {
@@ -28,10 +29,11 @@ class User {
         await sql.connect(config);
         const request = new sql.Request();
         const query = `
-          INSERT INTO Utilisateur (Nom, Email, MotDePasse, Role)
-          VALUES (@Nom, @Email, @MotDePasse, @Role)
+        INSERT INTO Utilisateur (Nom, Prenom, Email, MotDePasse, Role)
+        VALUES (@Nom, @Prenom, @Email, @MotDePasse, @Role)
         `;
         request.input('Nom', sql.NVarChar, this.nom);
+        request.input('Prenom', sql.NVarChar, this.prenom)
         request.input('Email', sql.NVarChar, this.email);
         request.input('MotDePasse', sql.NVarChar, this.motDePasse);
         request.input('Role', sql.NVarChar, this.role);

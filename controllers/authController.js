@@ -7,16 +7,16 @@ const { OAuth2Client } = require('google-auth-library');
 
 // Contrôleur pour l'inscription
 const registerUser = async (req, res) => {
-  const { nom, email, motDePasse } = req.body;
+  const { nom, prenom, email, motDePasse } = req.body;
 
-  if (!nom || !email || !motDePasse) {
+  if (!nom || !prenom || !email || !motDePasse) {
     return res.status(400).json({ message: 'Tous les champs sont obligatoires.' });
   }
 
   try {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(motDePasse, salt);
-    const user = new User(nom, email, hashedPassword);
+    const user = new User(nom, prenom, email, hashedPassword);
     await user.save();
     res.status(201).json({ message: 'Utilisateur enregistré avec succès !' });
   } catch (err) {
@@ -24,6 +24,7 @@ const registerUser = async (req, res) => {
     res.status(500).json({ message: 'Erreur lors de l\'inscription.' });
   }
 };
+
 
 // Contrôleur pour la connexion
 const loginUser = async (req, res) => {
@@ -61,7 +62,7 @@ const loginUser = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: utilisateur.ID_Utilisateur, email: utilisateur.Email, role: utilisateur.Role },
+      { id: utilisateur.ID_Utilisateur, nom: utilisateur.Nom, email: utilisateur.Email, role: utilisateur.Role },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
@@ -84,13 +85,21 @@ const loginUser = async (req, res) => {
 const googleSignIn = async (req, res) => {
   const token = req.body.token;
   const username = req.body.username;
-
-  const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
+  console.log("🟢 Token reçu :", token);
+  console.log("🔵 GOOGLE_CLIENT_ID_WEB:", process.env.GOOGLE_CLIENT_ID_WEB);
+  console.log("🟠 GOOGLE_CLIENT_ID_ANDROID:", process.env.GOOGLE_CLIENT_ID_ANDROID);  
+  const client = new OAuth2Client([
+    process.env.GOOGLE_CLIENT_ID_WEB,
+    process.env.GOOGLE_CLIENT_ID_ANDROID
+  ]);
+  
   try {
     const ticket = await client.verifyIdToken({
       idToken: token,
-      audience: process.env.GOOGLE_CLIENT_ID,
+       audience: [
+        process.env.GOOGLE_CLIENT_ID_WEB,
+        process.env.GOOGLE_CLIENT_ID_ANDROID
+      ],
     });
 
     const payload = ticket.getPayload();
@@ -117,12 +126,13 @@ const googleSignIn = async (req, res) => {
     if (!utilisateur) {
       const insertRequest = new sql.Request();
       insertRequest.input('Nom', sql.NVarChar, nom);
+      insertRequest.input('Preom', sql.NVarChar, prenom);
       insertRequest.input('Email', sql.NVarChar, email);
       insertRequest.input('MotDePasse', sql.NVarChar, bcrypt.hashSync('0000', 10));
       insertRequest.input('Role', sql.NVarChar, 'client');
       await insertRequest.query(`
-        INSERT INTO Utilisateur (Nom, Email, MotDePasse, Role)
-        VALUES (@Nom, @Email, @MotDePasse, @Role)
+        INSERT INTO Utilisateur (Nom, Prenom, Email, MotDePasse, Role)
+        VALUES (@Nom, @Prenom @Email, @MotDePasse, @Role)
       `);
 
       const fetch = new sql.Request();

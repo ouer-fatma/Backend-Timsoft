@@ -1,22 +1,13 @@
-//articleRoutes.js
 const express = require('express');
 const router = express.Router();
 const articleController = require('../controllers/articleController');
+const upload = require('../middlewares/upload');
 
-// GET all articles
+// Routes
 router.get('/', articleController.getAllArticles);
-
-
-// GET article by code
-router.get('/:codeArticle', articleController.getArticleByCode);
-
-// Create new article
-router.post('/', articleController.createArticle);
-
-// Update an article
-router.put('/:codeArticle', articleController.updateArticle);
-
-// Delete an article
-router.delete('/:codeArticle', articleController.deleteArticle);
+router.get('/:gaArticle', articleController.getArticleByGA); // identifiant GA_ARTICLE (VARCHAR)
+router.post('/', upload.single('image'), articleController.createArticle);
+router.put('/:id', articleController.updateArticle);
+router.delete('/:id', articleController.deleteArticle);
 
 module.exports = router;
