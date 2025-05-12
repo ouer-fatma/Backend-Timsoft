@@ -51,3 +51,16 @@ app.use('/api/stock-transfer', stockTransferRoutes);
 
 
 app.use('/click-collect', clickCollectRoutes);
+/*const retourRoutes = require('./routes/retourRoutes');
+
+// Après les autres middlewares
+app.use('/api/retours', retourRoutes);*/
+
+
+
+const retourRoutes = require('./routes/retour'); // 👉 importe le fichier routes
+
+
+
+// 🛣️ Ajouter les routes de retour
+app.use('/api', retourRoutes); // ou '/api/retour' si tu veux préfixer
