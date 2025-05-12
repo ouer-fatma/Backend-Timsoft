@@ -1,3 +1,4 @@
+//stockTransferController.js
 const { sql, poolPromise } = require('../db');
 
 exports.transferStock = async (req, res) => {

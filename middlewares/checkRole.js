@@ -1,3 +1,4 @@
+//checkRole
 const jwt = require('jsonwebtoken');
 
 function checkRole(role) {
