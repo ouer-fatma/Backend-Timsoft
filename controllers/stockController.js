@@ -1,3 +1,4 @@
+//stockController.js
 const { sql, poolPromise } = require('../db');
 
 exports.getStockByArticle = async (req, res) => {

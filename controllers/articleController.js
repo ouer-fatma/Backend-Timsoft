@@ -4,7 +4,7 @@ const { sql, poolPromise } = require('../db');
 exports.getAllArticles = async (req, res) => {
   try {
     const pool = await poolPromise;
-    const articlesResult = await pool.request().query('SELECT TOP 100 * FROM ARTICLE');
+    const articlesResult = await pool.request().query('SELECT TOP 10 * FROM ARTICLE ORDER BY GA_DATECREATION DESC');
     const articles = articlesResult.recordset;
 
     const articlesWithRemises = await Promise.all(
@@ -88,20 +88,19 @@ exports.getArticleByGA = async (req, res) => {
 // ✅ 3. Créer un nouvel article
 
   exports.createArticle = async (req, res) => {
-    const {
-      GA_ARTICLE,
-      GA_CODEARTICLE,
-      GA_CODEBARRE,
-      GA_LIBELLE,
-      GA_PVHT,
-      GA_PVTTC,
-      GA_TENUESTOCK
-    } = req.body;
-  
-    // Vérification des champs obligatoires
+    const GA_ARTICLE = req.body.GA_ARTICLE?.trim();
+    const GA_CODEARTICLE = req.body.GA_CODEARTICLE?.trim();
+    const GA_CODEBARRE = req.body.GA_CODEBARRE?.trim() || '';
+    const GA_LIBELLE = req.body.GA_LIBELLE?.trim();
+    const GA_PVHT = parseFloat(req.body.GA_PVHT) || 0;
+    const GA_PVTTC = parseFloat(req.body.GA_PVTTC) || 0;
+    const GA_TENUESTOCK = req.body.GA_TENUESTOCK?.trim() || 'O';
+    const imageFile = req.file;
+    
     if (!GA_ARTICLE || !GA_CODEARTICLE || !GA_LIBELLE) {
       return res.status(400).json({ message: 'Champs obligatoires manquants.' });
     }
+    
   
     try {
       const pool = await poolPromise;
@@ -124,10 +123,14 @@ exports.getArticleByGA = async (req, res) => {
             @GA_PVHT, @GA_PVTTC, @GA_TENUESTOCK, GETDATE()
           )
         `);
+
+        const imageURL = imageFile ? `http://localhost:3000/uploads/${imageFile.filename}` : null;
   
-      res.status(201).json({ message: 'Article créé avec succès.' });
+      res.status(201).json({ message: 'Article créé avec succès.', 
+        image: imageURL
+       });
   
-    } catch (err) {
+    } catch (err) { 
       res.status(500).json({
         message: 'Erreur lors de la création de l\'article.',
         error: err.message

@@ -9,4 +9,3 @@ router.get('/download/:nature/:souche/:numero/:indice', invoiceController.genera
 router.post('/send', invoiceController.sendInvoiceByEmail);
 
 module.exports = router;
-

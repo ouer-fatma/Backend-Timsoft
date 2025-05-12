@@ -1,10 +1,11 @@
+//orderRoutes.js
 const express = require('express');
 const router = express.Router();
 const orderController = require('../controllers/orderController');
 const checkRole = require('../middlewares/checkRole');
 
 // Protection
-router.use(checkRole('user'));
+router.use(checkRole('admin'));
 
 // Routes
 router.get('/', orderController.getAllOrders); 

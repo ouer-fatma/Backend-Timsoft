@@ -1,3 +1,4 @@
+//clickCollectController.js
 const { sql, poolPromise } = require('../db');
 
 // ✅ Afficher stock article par dépôt

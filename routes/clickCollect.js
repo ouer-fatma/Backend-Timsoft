@@ -1,3 +1,4 @@
+//clickCollect.js
 const express = require('express');
 const router = express.Router();
 const clickCollectController = require('../controllers/clickCollectController');
