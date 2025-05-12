@@ -5,21 +5,74 @@ const jwt = require('jsonwebtoken');
 
 // Contrôleur pour l'inscription
 const registerUser = async (req, res) => {
-  const { nom, email, motDePasse } = req.body;
+  const { nom, email, motDePasse, role } = req.body;
 
-  if (!nom || !email || !motDePasse) {
+  // Vérification des champs requis
+  if (!nom || !email || !motDePasse || !role) {
     return res.status(400).json({ message: 'Tous les champs sont obligatoires.' });
   }
 
   try {
+    // Hash du mot de passe
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(motDePasse, salt);
-    const user = new User(nom, email, hashedPassword);
-    await user.save();
+
+    // Connexion à la base de données
+    const { DB_USER, DB_PASSWORD, DB_SERVER, DB_DATABASE, DB_PORT } = process.env;
+    const config = {
+      user: DB_USER,
+      password: DB_PASSWORD,
+      server: DB_SERVER,
+      database: DB_DATABASE,
+      port: parseInt(DB_PORT),
+      options: { encrypt: true, trustServerCertificate: true }
+    };
+
+    await sql.connect(config);
+
+    // Étape 1 : Générer automatiquement un CodeTiers unique (ex: TR001)
+    const requestGetCode = new sql.Request();
+    const resultLastCode = await requestGetCode.query(`
+      SELECT TOP 1 T_TIERS 
+      FROM TIERS 
+      WHERE T_TIERS LIKE 'TR%' 
+      ORDER BY TRY_CAST(SUBSTRING(T_TIERS, 3, LEN(T_TIERS)) AS INT) DESC
+    `);
+
+    let newCodeTiers = 'TR001'; // valeur par défaut
+    if (resultLastCode.recordset.length > 0) {
+      const lastCode = resultLastCode.recordset[0].T_TIERS;
+      const numericPart = parseInt(lastCode.slice(2)) + 1;
+      newCodeTiers = 'TR' + numericPart.toString().padStart(3, '0');
+    }
+
+    // Étape 2 : Créer un enregistrement dans la table TIERS avec le nouveau CodeTiers
+    const requestInsertTiers = new sql.Request();
+    requestInsertTiers.input('T_TIERS', sql.VarChar, newCodeTiers);
+    await requestInsertTiers.query(`
+      INSERT INTO TIERS (T_TIERS) VALUES (@T_TIERS)
+    `);
+
+    // Étape 3 : Insérer l’utilisateur dans la table Utilisateur
+    const requestUser = new sql.Request();
+    requestUser.input('Nom', sql.VarChar, nom);
+    requestUser.input('Email', sql.VarChar, email);
+    requestUser.input('MotDePasse', sql.VarChar, hashedPassword);
+    requestUser.input('Role', sql.VarChar, role);
+    requestUser.input('CodeTiers', sql.VarChar, newCodeTiers);
+
+    await requestUser.query(`
+      INSERT INTO Utilisateur (Nom, Email, MotDePasse, Role, CodeTiers)
+      VALUES (@Nom, @Email, @MotDePasse, @Role, @CodeTiers)
+    `);
+
     res.status(201).json({ message: 'Utilisateur enregistré avec succès !' });
+
   } catch (err) {
     console.error('Erreur lors de l\'inscription :', err);
     res.status(500).json({ message: 'Erreur lors de l\'inscription.' });
+  } finally {
+    await sql.close();
   }
 };
 
