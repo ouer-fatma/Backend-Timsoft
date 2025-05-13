@@ -9,4 +9,7 @@ router.post('/retour', retourController.processRetour);
 router.get('/retours', retourController.getAllRetours);
 
 router.get('/retour/pdf/:numeroRetour', retourController.generateReturnReceipt);
+router.get('/retours/:utilisateur', retourController.getRetoursByClient);
+router.get('/retours/:utilisateur', retourController.getUserRetours);
+
 module.exports = router;
