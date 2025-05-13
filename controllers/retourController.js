@@ -23,17 +23,16 @@ exports.getAllRetours = async (req, res) => {
 
 
 exports.processRetour = async (req, res) => {
-  const { article, quantite, depot, utilisateur } = req.body;
+  const { article, quantite, depot, utilisateur, modeRetour } = req.body;
 
-  // ✅ Validation des champs requis
-  if (!article || !quantite || !depot || !utilisateur) {
+  if (!article || !quantite || !depot || !utilisateur || !modeRetour) {
     return res.status(400).json({ error: 'Champs requis manquants.' });
   }
 
   try {
     const pool = await poolPromise;
 
-    // ✅ Étape 1 : Vérifie l’existence d’un achat < 30 jours
+    // Vérifie la date de la dernière vente
     const venteResult = await pool.request()
       .input('article', sql.NVarChar, article.trim())
       .input('tiers', sql.NVarChar, utilisateur)
@@ -42,7 +41,7 @@ exports.processRetour = async (req, res) => {
         FROM PIECE
         JOIN LIGNE ON LIGNE.GL_NUMERO = PIECE.GP_NUMERO
         WHERE GL_ARTICLE = @article AND GP_TIERS = @tiers
-          AND GP_NATUREPIECEG IN ('FAC', 'CMD')  -- adapte ici selon tes besoins
+          AND GP_NATUREPIECEG IN ('FAC', 'CMD')
           AND GL_QTEFACT > 0
         ORDER BY GP_DATECREATION DESC
       `);
@@ -55,11 +54,14 @@ exports.processRetour = async (req, res) => {
     const aujourdHui = new Date();
     const differenceJours = Math.floor((aujourdHui - dateVente) / (1000 * 60 * 60 * 24));
 
-    if (differenceJours > 30) {
+   const retourRefuse = differenceJours >= 30; 
+    const statutRetour = retourRefuse ? 'refusé' : 'accepté';
+
+    if (retourRefuse) {
       return res.status(403).json({ message: "Retour refusé : le délai de 30 jours est dépassé." });
     }
 
-    // ✅ Étape 2 : Enregistrement du retour
+    // Début de transaction
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
@@ -72,12 +74,14 @@ exports.processRetour = async (req, res) => {
       .input('GP_DATEPIECE', sql.DateTime, new Date())
       .input('GP_SOUCHE', sql.NVarChar(6), 'RT')
       .input('GP_NATUREPIECEG', sql.NVarChar(3), 'FFO')
+      .input('GP_MODERETOUR', sql.NVarChar(20), modeRetour)
+      .input('GP_STATUTRETOUR', sql.NVarChar(20), statutRetour)
       .query(`
-        INSERT INTO PIECE (GP_NUMERO, GP_TIERS, GP_DATEPIECE, GP_SOUCHE, GP_NATUREPIECEG)
-        VALUES (@GP_NUMERO, @GP_TIERS, @GP_DATEPIECE, @GP_SOUCHE, @GP_NATUREPIECEG)
+        INSERT INTO PIECE (GP_NUMERO, GP_TIERS, GP_DATEPIECE, GP_SOUCHE, GP_NATUREPIECEG, GP_MODERETOUR, GP_STATUTRETOUR)
+        VALUES (@GP_NUMERO, @GP_TIERS, @GP_DATEPIECE, @GP_SOUCHE, @GP_NATUREPIECEG, @GP_MODERETOUR, @GP_STATUTRETOUR)
       `);
 
-    // Insertion dans LIGNE
+    // Insertion ligne
     await new sql.Request(transaction)
       .input('GL_NUMERO', sql.Int, pieceId)
       .input('GL_ARTICLE', sql.NVarChar(50), article.trim())
@@ -156,4 +160,53 @@ exports.processRetour = async (req, res) => {
       res.status(500).json({ error: err.message });
     }
   };
-  
+  exports.getRetoursByClient = async (req, res) => {
+  const { utilisateur } = req.params;
+  const pool = await poolPromise;
+
+  try {
+    const result = await pool.request()
+      .input('utilisateur', sql.NVarChar, utilisateur)
+      .query(`
+        SELECT GP_NUMERO, GP_DATEPIECE, GP_MODERETOUR, GP_STATUTRETOUR
+        FROM PIECE
+        WHERE GP_TIERS = @utilisateur AND GP_NATUREPIECEG = 'FFO'
+        ORDER BY GP_DATEPIECE DESC
+      `);
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+exports.getUserRetours = async (req, res) => {
+  const { utilisateur } = req.params;
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('utilisateur', sql.NVarChar(17), utilisateur)
+      .query(`
+        SELECT 
+          P.GP_NUMERO AS numeroRetour,
+          P.GP_DATEPIECE AS dateRetour,
+          P.GP_STATUTRETOUR AS statut,
+          P.GP_MODERETOUR AS modeRetour,
+          L.GL_ARTICLE AS article,
+          L.GL_QTEFACT AS quantite
+        FROM PIECE P
+        JOIN LIGNE L ON 
+          P.GP_NUMERO = L.GL_NUMERO AND 
+          P.GP_SOUCHE = L.GL_SOUCHE AND 
+          P.GP_NATUREPIECEG = L.GL_NATUREPIECEG
+        WHERE 
+          P.GP_TIERS = @utilisateur AND 
+          P.GP_NATUREPIECEG = 'FFO'
+        ORDER BY P.GP_DATEPIECE DESC
+      `);
+
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    console.error('❌ Erreur lors de la récupération des retours :', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+

@@ -1,28 +1,30 @@
 require("dotenv").config();
 const express = require("express");
-const cors = require("cors"); // ✅ ADD THIS LINE
+const cors = require("cors");
+const path = require("path");
+
 const authRoutes = require('./routes/authRoutes');
 const articleRoutes = require('./routes/articleRoutes');
 const userRoutes = require('./routes/userRoutes');
 const orderRoutes = require('./routes/orderRoutes');
-const { poolPromise } = require('./db');
-
 const clickCollectRoutes = require('./routes/clickCollect');
 const stockRoutes = require('./routes/stockRoutes');
 const invoiceRoutes = require('./routes/invoice');
 const stockTransferRoutes = require('./routes/stockTransferRoutes');
+const retourRoutes = require('./routes/retour'); // 👉 nouveau fichier de routes
+
+const { poolPromise } = require('./db');
 
 const app = express();
 const port = process.env.PORT || 3000;
-const path = require('path');
 
-// ✅ ENABLE CORS
+// ✅ Activer CORS
 app.use(cors());
 
-// Enable JSON parsing
+// ✅ Permet le parsing du JSON
 app.use(express.json());
 
-// Check DB connection
+// ✅ Vérifie la connexion à la base de données
 poolPromise
   .then(() => {
     console.log("✅ Connexion à la base de données établie !");
@@ -32,7 +34,7 @@ poolPromise
     process.exit(1);
   });
 
-// Routes
+// ✅ Définir les routes
 app.use('/auth', authRoutes);
 app.use('/articles', articleRoutes);
 app.use('/users', userRoutes);
@@ -42,13 +44,14 @@ app.use('/api/invoice', invoiceRoutes);
 app.use('/api/stock-transfer', stockTransferRoutes);
 app.use('/click-collect', clickCollectRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/api', retourRoutes); // 👉 Route ajoutée pour les retours
 
-// Test route
+// ✅ Route de test
 app.get('/test', (req, res) => {
   res.status(200).json({ message: 'Route test fonctionne parfaitement !' });
 });
 
-// Start server
+// ✅ Démarrer le serveur
 app.listen(port, () => {
   console.log(`🚀 Serveur démarré sur http://localhost:${port}`);
 });
