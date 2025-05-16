@@ -5,6 +5,8 @@ const authRoutes = require('./routes/authRoutes');
 const articleRoutes = require('./routes/articleRoutes');
 const userRoutes = require('./routes/userRoutes');
 const orderRoutes = require('./routes/orderRoutes');
+const panierRoutes = require('./routes/panierRoutes');
+
 const { poolPromise } = require('./db');
 
 const clickCollectRoutes = require('./routes/clickCollect');
@@ -37,6 +39,7 @@ app.use('/auth', authRoutes);
 app.use('/articles', articleRoutes);
 app.use('/users', userRoutes);
 app.use('/orders', orderRoutes);
+app.use('/panier', panierRoutes);
 app.use('/api', stockRoutes);
 app.use('/api/invoice', invoiceRoutes);
 app.use('/api/stock-transfer', stockTransferRoutes);

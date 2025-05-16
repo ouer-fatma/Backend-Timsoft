@@ -7,19 +7,26 @@ const storage = multer.diskStorage({
     cb(null, 'uploads/');
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
+    const codeArticle = req.body.GA_CODEARTICLE?.replace(/\s+/g, '') || 'unknown';
+    const ext = path.extname(file.originalname);
+    cb(null, `${Date.now()}-${codeArticle}${ext}`);
   }
+  
 });
 
 // File filter (optional: image only)
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg'];
-  if (allowedTypes.includes(file.mimetype)) {
+  const allowedExtensions = ['.jpg', '.jpeg', '.png'];
+  const ext = path.extname(file.originalname).toLowerCase();
+
+  if (allowedExtensions.includes(ext)) {
     cb(null, true);
   } else {
     cb(new Error('Only JPG, JPEG, PNG files are allowed.'), false);
   }
 };
+
+
 
 const upload = multer({
   storage,

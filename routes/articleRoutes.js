@@ -5,6 +5,7 @@ const upload = require('../middlewares/upload');
 
 // Routes
 router.get('/', articleController.getAllArticles);
+router.get('/search/:query', articleController.searchArticles);
 router.get('/:gaArticle', articleController.getArticleByGA); // identifiant GA_ARTICLE (VARCHAR)
 router.post('/', upload.single('image'), articleController.createArticle);
 router.put('/:id', articleController.updateArticle);
