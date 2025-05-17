@@ -1,9 +1,10 @@
 //authController
 const bcrypt = require('bcrypt');
-const sql = require('mssql');
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
+const { sql, poolPromise } = require('../db');
+
 
 // Contrôleur pour l'inscription
 const registerUser = async (req, res) => {
@@ -29,7 +30,7 @@ const registerUser = async (req, res) => {
 
     await sql.connect(config);
 
-    // ❗ Étape 0 : Vérifier si l'email existe déjà
+    // ❗ Vérifier si l'email existe déjà
     const checkEmailRequest = new sql.Request();
     checkEmailRequest.input('Email', sql.VarChar, email);
     const existingUser = await checkEmailRequest.query('SELECT 1 FROM Utilisateur WHERE Email = @Email');
@@ -38,7 +39,7 @@ const registerUser = async (req, res) => {
       return res.status(409).json({ message: 'Cet e-mail est déjà utilisé.' });
     }
 
-    // Étape 1 : Générer un nouveau CodeTiers
+    // ✅ Générer un nouveau CodeTiers
     const requestGetCode = new sql.Request();
     const resultLastCode = await requestGetCode.query(`
       SELECT TOP 1 T_TIERS 
@@ -54,23 +55,47 @@ const registerUser = async (req, res) => {
       newCodeTiers = 'TR' + numericPart.toString().padStart(3, '0');
     }
 
-    // Étape 2 : Insertion dans la table TIERS
-    const requestInsertTiers = new sql.Request();
-    requestInsertTiers.input('T_TIERS', sql.VarChar, newCodeTiers);
-    await requestInsertTiers.query(`INSERT INTO TIERS (T_TIERS) VALUES (@T_TIERS)`);
+    // ✅ Insérer dans la table TIERS
+    const insertTiersRequest = new sql.Request();
+    insertTiersRequest.input('T_TIERS', sql.VarChar, newCodeTiers);
+    await insertTiersRequest.query(`INSERT INTO TIERS (T_TIERS) VALUES (@T_TIERS)`);
 
-    // Étape 3 : Insertion dans la table Utilisateur
-    const requestUser = new sql.Request();
-    requestUser.input('Nom', sql.VarChar, nom);
-    requestUser.input('Email', sql.VarChar, email);
-    requestUser.input('MotDePasse', sql.VarChar, hashedPassword);
-    requestUser.input('Role', sql.VarChar, role);
-    requestUser.input('CodeTiers', sql.VarChar, newCodeTiers);
+    // ✅ Créer et enregistrer l'utilisateur avec CodeTiers
+    const user = new User(nom, prenom, email, hashedPassword, 'client'); // tu peux ajuster le rôle si besoin
+    user.codeTiers = newCodeTiers;
 
-    await requestUser.query(`
-      INSERT INTO Utilisateur (Nom, Email, MotDePasse, Role, CodeTiers)
-      VALUES (@Nom, @Email, @MotDePasse, @Role, @CodeTiers)
-    `);
+    await user.save();
+
+ // 🛒 Initialiser un panier vide pour l'utilisateur nouvellement inscrit
+// 🛒 Initialiser un panier vide pour le nouvel utilisateur
+const pool = await poolPromise;
+// Utilise un seul request pour éviter overlap
+const request = pool.request();
+
+const resultNumero = await request.query(`
+  SELECT MAX(CAST(GP_NUMERO AS INT)) + 1 AS newNumero 
+  FROM PIECE 
+  WHERE ISNUMERIC(GP_NUMERO) = 1
+`);
+
+const newNumero = resultNumero.recordset[0].newNumero || 1;
+
+// 👇 insère en une seule transaction
+await request
+  .input('nature', sql.NVarChar, 'PAN')
+  .input('souche', sql.NVarChar, 'PAN001')
+  .input('numero', sql.Int, newNumero)
+  .input('indice', sql.Int, 0)
+  .input('tiers', sql.NVarChar, newCodeTiers)
+  .query(`
+    INSERT INTO PIECE (GP_NATUREPIECEG, GP_SOUCHE, GP_NUMERO, GP_INDICEG, GP_TIERS, GP_DATEPIECE)
+    VALUES (@nature, @souche, @numero, @indice, @tiers, GETDATE())
+  `);
+
+
+
+
+    
 
     res.status(201).json({ message: 'Utilisateur enregistré avec succès !' });
 
@@ -79,8 +104,10 @@ const registerUser = async (req, res) => {
     res.status(500).json({ message: 'Erreur lors de l\'inscription.' });
   } finally {
     await sql.close();
+    sql.close();
   }
 };
+
 
 
 // Contrôleur pour la connexion
@@ -119,10 +146,17 @@ const loginUser = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: utilisateur.ID_Utilisateur, nom: utilisateur.Nom, email: utilisateur.Email, role: utilisateur.Role },
+      {
+        id: utilisateur.ID_Utilisateur,
+        nom: utilisateur.Nom,
+        email: utilisateur.Email,
+        role: utilisateur.Role,
+        codeTiers: utilisateur.CodeTiers // 👈 ajoute ça
+      },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
+    
 
     console.log("Email reçu:", email);
     console.log("Utilisateur trouvé:", utilisateur);
