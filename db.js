@@ -12,7 +12,7 @@ const config = {
     trustServerCertificate: true,
   },
   connectionTimeout: 30000, // 30 secondes pour se connecter
-  requestTimeout: 30000,    // 30 secondes pour exécuter une requête
+  requestTimeout: 120000, // 120 secondes pour exécuter une requête
 };
 
 console.log('🔄 Tentative de connexion à la base de données...');

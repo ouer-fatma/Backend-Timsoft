@@ -1,4 +1,6 @@
 const { sql, poolPromise } = require('../db');
+const fs = require('fs');
+const path = require('path');
 
 // ✅ 1. Récupérer les 100 premiers articles avec leur remise générale
 exports.getAllArticles = async (req, res) => {
@@ -21,13 +23,25 @@ exports.getAllArticles = async (req, res) => {
 
         const remise = remiseResult.recordset[0];
 
-        return {
-          ...article,
-          REMISE: remise ? {
-            MLR_REMISE: remise.MLR_REMISE,
-            DATE_EFFET: remise.MLR_DATEPIECE
-          } : null
-        };
+           // 🔍 Recherche de l'image correspondante dans /uploads
+    const uploadsPath = path.join(__dirname, '..', 'uploads');
+    const files = fs.readdirSync(uploadsPath);
+    const matchedFile = files.find(file =>
+      file.toLowerCase().includes(article.GA_CODEARTICLE.toLowerCase())
+    );
+    const imageUrl = matchedFile
+      ? `http://localhost:3000/uploads/${matchedFile}`
+      : null;
+
+      return {
+        ...article,
+        GA_IMAGE_URL: imageUrl, // ✅ image ajoutée ici
+        REMISE: remise ? {
+          MLR_REMISE: remise.MLR_REMISE,
+          DATE_EFFET: remise.MLR_DATEPIECE
+        } : null
+      };
+      
       })
     );
 
@@ -83,6 +97,53 @@ exports.getArticleByGA = async (req, res) => {
     });
   }
 };
+
+
+// 🔍 Rechercher des articles par libellé uniquement
+exports.searchArticles = async (req, res) => {
+  const { query } = req.params;
+
+  if (!query || query.trim() === '') {
+    return res.status(400).json({ message: 'Requête vide.' });
+  }
+
+  try {
+    const pool = await poolPromise;
+
+    const result = await pool.request()
+      .input('query', sql.NVarChar, `%${query}%`)
+      .query(`
+        SELECT TOP 20 * FROM ARTICLE
+        WHERE GA_LIBELLE LIKE @query
+        ORDER BY GA_DATECREATION DESC
+      `);
+
+    const articles = result.recordset;
+
+    const uploadsPath = path.join(__dirname, '..', 'uploads');
+    const files = fs.readdirSync(uploadsPath);
+
+    const articlesWithImages = articles.map((article) => {
+      const matchedFile = files.find(file =>
+        file.toLowerCase().includes(article.GA_CODEARTICLE.toLowerCase())
+      );
+
+      const imageUrl = matchedFile
+        ? `http://localhost:3000/uploads/${matchedFile}`
+        : null;
+
+      return {
+        ...article,
+        GA_IMAGE_URL: imageUrl,
+      };
+    });
+
+    res.status(200).json(articlesWithImages);
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur lors de la recherche.', error: err.message });
+  }
+};
+
 
 
 // ✅ 3. Créer un nouvel article
