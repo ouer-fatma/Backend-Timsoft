@@ -144,13 +144,27 @@ exports.createOrder = async (req, res) => {
     GP_NUMERO,
     GP_INDICEG,
     GP_DATECREATION,
+    GP_LIBRETIERS1,
     GP_DEPOT,
     lignes = []
   } = req.body;
 
   const userId = req.user?.id;
-  if (!userId) {
-    return res.status(401).json({ message: "Utilisateur non authentifié." });
+  if (!userId) return res.status(401).json({ message: "Utilisateur non authentifié." });
+
+  const isRetrait = GP_LIBRETIERS1?.startsWith('S');
+  const isLivraison = GP_LIBRETIERS1 === 'LOC';
+
+  if (!GP_LIBRETIERS1 || (isRetrait && !GP_DEPOT)) {
+    return res.status(400).json({ message: 'Mode de livraison ou dépôt retrait manquant.' });
+  }
+
+  if (!GP_NATUREPIECEG || !GP_SOUCHE || !GP_NUMERO || !GP_INDICEG || !GP_DATECREATION) {
+    return res.status(400).json({ message: 'Champs obligatoires manquants.' });
+  }
+
+  if (!Array.isArray(lignes) || lignes.length === 0) {
+    return res.status(400).json({ message: 'Lignes de commande invalides ou absentes.' });
   }
 
   try {
@@ -165,25 +179,42 @@ exports.createOrder = async (req, res) => {
     }
 
     const GP_TIERS = userResult.recordset[0].CodeTiers;
-
-    if (!GP_NATUREPIECEG || !GP_SOUCHE || !GP_NUMERO || !GP_INDICEG || !GP_DATECREATION || !GP_DEPOT) {
-      return res.status(400).json({ message: 'Champs obligatoires manquants.' });
-    }
-
-    if (!Array.isArray(lignes) || lignes.length === 0) {
-      return res.status(400).json({ message: 'Lignes de commande invalides ou absentes.' });
-    }
-
     let GP_TOTALHT = 0;
     let GP_TOTALTTC = 0;
     const lignesAvecPrixEtRemise = [];
+    let commandeStatut = 'ENR'; // ENR = Enregistrée, ATT = En attente
+
+    if (isRetrait) {
+      for (const ligne of lignes) {
+        const { GL_ARTICLE, GL_QTEFACT } = ligne;
+        if (!GL_ARTICLE || !GL_QTEFACT) continue;
+
+        const checkStock = await pool.request()
+          .input('article', sql.NVarChar(50), GL_ARTICLE.trim())
+          .input('depot', sql.NVarChar(6), GP_DEPOT.trim())
+          .query(`
+            SELECT SUM(ISNULL(GQ_PHYSIQUE, 0)) AS PHYSIQUE, SUM(ISNULL(GQ_RESERVECLI, 0)) AS RESERVECLI
+            FROM DISPO
+            WHERE REPLACE(GQ_ARTICLE, ' ', '') = REPLACE(@article, ' ', '')
+              AND REPLACE(GQ_DEPOT, ' ', '') = REPLACE(@depot, ' ', '')
+          `);
+
+        const { PHYSIQUE = 0, RESERVECLI = 0 } = checkStock.recordset[0] || {};
+        const disponible = PHYSIQUE - RESERVECLI;
+
+        if (disponible < GL_QTEFACT) {
+          commandeStatut = 'ATT';
+          break; // Un seul article en rupture suffit à bloquer la validation
+        }
+      }
+    }
 
     for (const ligne of lignes) {
       const { GL_ARTICLE, GL_QTEFACT } = ligne;
-      if (!GL_ARTICLE|| !GL_QTEFACT) continue;
+      if (!GL_ARTICLE || !GL_QTEFACT) continue;
 
       const prixResult = await pool.request()
-        .input('code', sql.NVarChar, GL_ARTICLE)
+        .input('code', sql.NVarChar(50), GL_ARTICLE)
         .query('SELECT GA_PVHT, GA_PVTTC FROM ARTICLE WHERE GA_ARTICLE = @code');
 
       if (prixResult.recordset.length === 0) {
@@ -192,14 +223,12 @@ exports.createOrder = async (req, res) => {
 
       const { GA_PVHT, GA_PVTTC } = prixResult.recordset[0];
 
-      // ✅ Remise via les bons noms : MLR_ORGREMISE, MLR_CODECOND, MLR_REMISE, MLR_DATEPIECE
       const remiseResult = await pool.request()
-        .input('gaArticle', sql.NVarChar, GL_ARTICLE.trim())
-        .input('codeTiers', sql.NVarChar, GP_TIERS.trim())
+        .input('gaArticle', sql.NVarChar(50), GL_ARTICLE.trim())
+        .input('codeTiers', sql.NVarChar(50), GP_TIERS.trim())
         .input('dateCommande', sql.DateTime, GP_DATECREATION)
         .query(`
-          SELECT TOP 1 MLR_REMISE
-          FROM REMISE
+          SELECT TOP 1 MLR_REMISE FROM REMISE
           WHERE MLR_ORGREMISE = @gaArticle
             AND MLR_CODECOND = @codeTiers
             AND MLR_DATEPIECE <= @dateCommande
@@ -207,7 +236,6 @@ exports.createOrder = async (req, res) => {
         `);
 
       const remise = remiseResult.recordset[0]?.MLR_REMISE || 0;
-
       const prixHTRemise = GA_PVHT * (1 - remise / 100);
       const prixTTCRemise = GA_PVTTC * (1 - remise / 100);
       const totalHT = prixHTRemise * GL_QTEFACT;
@@ -217,35 +245,31 @@ exports.createOrder = async (req, res) => {
       GP_TOTALHT += totalHT;
       GP_TOTALTTC += totalTTC;
 
-      lignesAvecPrixEtRemise.push({
-        ...ligne,
-        remise,
-        remiseMontant
-      });
+      lignesAvecPrixEtRemise.push({ ...ligne, remise, remiseMontant });
     }
 
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
-    const request = new sql.Request(transaction);
-
-    await request
+    await new sql.Request(transaction)
       .input('GP_NATUREPIECEG', sql.NVarChar(3), GP_NATUREPIECEG)
       .input('GP_SOUCHE', sql.NVarChar(6), GP_SOUCHE)
       .input('GP_NUMERO', sql.Int, GP_NUMERO)
       .input('GP_INDICEG', sql.Int, GP_INDICEG)
-      .input('GP_TIERS', sql.NVarChar(17), GP_TIERS)
+      .input('GP_TIERS', sql.NVarChar(50), GP_TIERS)
       .input('GP_TOTALHT', sql.Numeric(19, 4), GP_TOTALHT)
       .input('GP_TOTALTTC', sql.Numeric(19, 4), GP_TOTALTTC)
       .input('GP_DATECREATION', sql.DateTime, GP_DATECREATION)
-      .input('GP_DEPOT', sql.NVarChar(6), GP_DEPOT)
+      .input('GP_DEPOT', sql.NVarChar(6), isRetrait ? GP_DEPOT : null)
+      .input('GP_LIBRETIERS1', sql.NVarChar(50), GP_LIBRETIERS1)
+      .input('GP_STATUTPIECE', sql.NVarChar(10), commandeStatut)
       .query(`
         INSERT INTO PIECE (
           GP_NATUREPIECEG, GP_SOUCHE, GP_NUMERO, GP_INDICEG,
-          GP_TIERS, GP_TOTALHT, GP_TOTALTTC, GP_DATECREATION, GP_DEPOT
+          GP_TIERS, GP_TOTALHT, GP_TOTALTTC, GP_DATECREATION, GP_DEPOT, GP_LIBRETIERS1, GP_STATUTPIECE
         ) VALUES (
           @GP_NATUREPIECEG, @GP_SOUCHE, @GP_NUMERO, @GP_INDICEG,
-          @GP_TIERS, @GP_TOTALHT, @GP_TOTALTTC, @GP_DATECREATION, @GP_DEPOT
+          @GP_TIERS, @GP_TOTALHT, @GP_TOTALTTC, @GP_DATECREATION, @GP_DEPOT, @GP_LIBRETIERS1, @GP_STATUTPIECE
         )
       `);
 
@@ -253,14 +277,12 @@ exports.createOrder = async (req, res) => {
       const { GL_ARTICLE, GL_QTEFACT, remise, remiseMontant } = lignesAvecPrixEtRemise[i];
       const GL_NUMLIGNE = i + 1;
 
-      const ligneRequest = new sql.Request(transaction);
-
-      await ligneRequest
+      await new sql.Request(transaction)
         .input('GL_NATUREPIECEG', sql.NVarChar(3), GP_NATUREPIECEG)
         .input('GL_SOUCHE', sql.NVarChar(6), GP_SOUCHE)
         .input('GL_NUMERO', sql.Int, GP_NUMERO)
         .input('GL_INDICEG', sql.Int, GP_INDICEG)
-        .input('GL_ARTICLE', sql.NVarChar(18), GL_ARTICLE)
+        .input('GL_ARTICLE', sql.NVarChar(50), GL_ARTICLE)
         .input('GL_QTEFACT', sql.Numeric(19, 4), GL_QTEFACT)
         .input('GL_NUMLIGNE', sql.Int, GL_NUMLIGNE)
         .input('GL_REMISELIGNE', sql.Float, remise)
@@ -280,19 +302,21 @@ exports.createOrder = async (req, res) => {
 
     await transaction.commit();
     res.status(201).json({
-      message: 'Commande et lignes créées avec succès.',
+      message: commandeStatut === 'ATT'
+        ? '🕐 Commande enregistrée mais en attente de stock.'
+        : '✅ Commande créée avec succès.',
       GP_TOTALHT,
-      GP_TOTALTTC
+      GP_TOTALTTC,
+      statut: commandeStatut
     });
 
   } catch (err) {
     res.status(500).json({
-      message: 'Erreur lors de la création de la commande.',
+      message: '❌ Erreur lors de la création de la commande.',
       error: err.message
     });
   }
 };
-
 
 // Modifier une commande
 exports.updateOrder = async (req, res) => {
@@ -355,5 +379,37 @@ exports.deleteOrder = async (req, res) => {
     res.status(200).json({ message: 'Commande supprimée avec succès.' });
   } catch (err) {
     res.status(500).json({ message: 'Erreur suppression commande.', error: err.message });
+  }
+};
+exports.getOrdersEnAttente = async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .query(`SELECT * FROM PIECE WHERE GP_STATUTPIECE = 'ATT' ORDER BY GP_DATECREATION DESC`);
+
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur récupération commandes en attente.', error: err.message });
+  }
+};
+exports.marquerCommandeCommePrete = async (req, res) => {
+  const { nature, souche, numero, indice } = req.params;
+
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('GP_NATUREPIECEG', sql.NVarChar(3), nature)
+      .input('GP_SOUCHE', sql.NVarChar(6), souche)
+      .input('GP_NUMERO', sql.Int, numero)
+      .input('GP_INDICEG', sql.Int, indice)
+      .query(`
+        UPDATE PIECE
+        SET GP_STATUTPIECE = 'ENR'
+        WHERE GP_NATUREPIECEG=@GP_NATUREPIECEG AND GP_SOUCHE=@GP_SOUCHE AND GP_NUMERO=@GP_NUMERO AND GP_INDICEG=@GP_INDICEG
+      `);
+
+    res.status(200).json({ message: 'Commande marquée comme prête.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur mise à jour commande.', error: err.message });
   }
 };

@@ -28,11 +28,17 @@ exports.getStockByArticle = async (req, res) => {
 
 // ✅ Réservation Click & Collect
 exports.confirmClickCollect = async (req, res) => {
-  const { article, quantite, depotRetrait, utilisateur } = req.body;
+  const { article, quantite, mode, depotRetrait, utilisateur } = req.body;
 
-  if (!article || !quantite || !depotRetrait) {
-    return res.status(400).json({ error: 'Champs requis manquants.' });
+  if (!article || !quantite || !mode) {
+    return res.status(400).json({ error: 'Champs requis manquants (article, quantite, mode).' });
   }
+
+  if (mode === 'retrait' && !depotRetrait) {
+    return res.status(400).json({ error: 'Dépôt de retrait obligatoire pour le mode retrait.' });
+  }
+
+  const depot = mode === 'retrait' ? depotRetrait.trim() : null;
 
   const pool = await poolPromise;
   const transaction = new sql.Transaction(pool);
@@ -40,68 +46,74 @@ exports.confirmClickCollect = async (req, res) => {
   try {
     await transaction.begin();
 
-    // ✅ Correction ici : utilisation de SUM
-    const checkStock = await new sql.Request(transaction)
-      .input('article', sql.NVarChar(50), article.trim())
-      .input('depot', sql.NVarChar(6), depotRetrait.trim())
-      .query(`
-        SELECT 
-          SUM(ISNULL(GQ_PHYSIQUE, 0)) AS PHYSIQUE,
-          SUM(ISNULL(GQ_RESERVECLI, 0)) AS RESERVECLI
-        FROM DISPO
-        WHERE REPLACE(GQ_ARTICLE, ' ', '') = REPLACE(@article, ' ', '')
-          AND REPLACE(GQ_DEPOT, ' ', '') = REPLACE(@depot, ' ', '')
-      `);
+    if (mode === 'retrait') {
+      // ✅ Vérifier le stock uniquement si c'est un retrait
+      const checkStock = await new sql.Request(transaction)
+        .input('article', sql.NVarChar(50), article.trim())
+        .input('depot', sql.NVarChar(6), depot)
+        .query(`
+          SELECT 
+            SUM(ISNULL(GQ_PHYSIQUE, 0)) AS PHYSIQUE,
+            SUM(ISNULL(GQ_RESERVECLI, 0)) AS RESERVECLI
+          FROM DISPO
+          WHERE REPLACE(GQ_ARTICLE, ' ', '') = REPLACE(@article, ' ', '')
+            AND REPLACE(GQ_DEPOT, ' ', '') = REPLACE(@depot, ' ', '')
+        `);
 
-    if (checkStock.recordset.length === 0) {
-      await transaction.rollback();
-      return res.status(404).json({ error: "Article non trouvé dans ce dépôt." });
+      if (checkStock.recordset.length === 0) {
+        await transaction.rollback();
+        return res.status(404).json({ error: "Article non trouvé dans ce dépôt." });
+      }
+
+      const { PHYSIQUE, RESERVECLI } = checkStock.recordset[0];
+      const disponible = PHYSIQUE - RESERVECLI;
+
+      if (disponible < quantite) {
+        await transaction.rollback();
+        return res.status(409).json({ error: "❌ Stock insuffisant pour la réservation." });
+      }
     }
 
-    const { PHYSIQUE, RESERVECLI } = checkStock.recordset[0];
-    const disponible = PHYSIQUE - RESERVECLI;
+    const pieceId = `CC-${depot || 'LIV'}-${Date.now()}`;
 
-    if (disponible < quantite) {
-      await transaction.rollback();
-      return res.status(409).json({ error: "❌ Stock insuffisant pour la réservation." });
-    }
-
-    const pieceId = `CC-${depotRetrait}-${Date.now()}`;
-
-    // ➕ Créer entête
+    // ✅ Création de la pièce (commande)
     await new sql.Request(transaction)
       .input('GP_NUMPIECE', sql.NVarChar(40), pieceId)
       .input('GP_TIERS', sql.NVarChar(17), utilisateur || 'CLIENT_WEB')
       .input('GP_DATEPIECE', sql.DateTime, new Date())
       .input('GP_SOUCHE', sql.NVarChar(6), 'CC')
-      .input('GP_STATUTPIECE', sql.NVarChar(3), 'ENR')  // ENR = Enregistrée
+      .input('GP_STATUTPIECE', sql.NVarChar(3), 'ENR')
+      .input('GP_DEPOT', sql.NVarChar(6), depot)                        // 🧠 dépôt = null si livraison
+      .input('GP_LIBRETIERS1', sql.NVarChar(50), mode)                 // ⬅️ on stocke "livraison" ou "retrait"
       .query(`
-        INSERT INTO PIECE (GP_NUMPIECE, GP_TIERS, GP_DATEPIECE, GP_SOUCHE, GP_STATUTPIECE)
-        VALUES (@GP_NUMPIECE, @GP_TIERS, @GP_DATEPIECE, @GP_SOUCHE, @GP_STATUTPIECE)
+        INSERT INTO PIECE (GP_NUMPIECE, GP_TIERS, GP_DATEPIECE, GP_SOUCHE, GP_STATUTPIECE, GP_DEPOT, GP_LIBRETIERS1)
+        VALUES (@GP_NUMPIECE, @GP_TIERS, @GP_DATEPIECE, @GP_SOUCHE, @GP_STATUTPIECE, @GP_DEPOT, @GP_LIBRETIERS1)
       `);
 
-    // ➕ Créer ligne
+    // ✅ Ajouter la ligne article
     await new sql.Request(transaction)
       .input('GL_PIECEPRECEDENTE', sql.NVarChar(40), pieceId)
       .input('GL_ARTICLE', sql.NVarChar(50), article.trim())
       .input('GL_QTEFACT', sql.Numeric(19, 4), quantite)
-      .input('GL_DEPOT', sql.NVarChar(6), depotRetrait)
+      .input('GL_DEPOT', sql.NVarChar(6), depot)
       .query(`
         INSERT INTO LIGNE (GL_PIECEPRECEDENTE, GL_ARTICLE, GL_QTEFACT, GL_DEPOT)
         VALUES (@GL_PIECEPRECEDENTE, @GL_ARTICLE, @GL_QTEFACT, @GL_DEPOT)
       `);
 
-    // 🔁 Réserver le stock
-    await new sql.Request(transaction)
-      .input('article', sql.NVarChar(50), article.trim())
-      .input('depot', sql.NVarChar(6), depotRetrait)
-      .input('quantite', sql.Numeric(19, 4), quantite)
-      .query(`
-        UPDATE DISPO
-        SET GQ_RESERVECLI = GQ_RESERVECLI + @quantite
-        WHERE REPLACE(GQ_ARTICLE, ' ', '') = REPLACE(@article, ' ', '')
-          AND REPLACE(GQ_DEPOT, ' ', '') = REPLACE(@depot, ' ', '')
-      `);
+    // ✅ Réserver le stock si c'est un retrait
+    if (mode === 'retrait') {
+      await new sql.Request(transaction)
+        .input('article', sql.NVarChar(50), article.trim())
+        .input('depot', sql.NVarChar(6), depot)
+        .input('quantite', sql.Numeric(19, 4), quantite)
+        .query(`
+          UPDATE DISPO
+          SET GQ_RESERVECLI = GQ_RESERVECLI + @quantite
+          WHERE REPLACE(GQ_ARTICLE, ' ', '') = REPLACE(@article, ' ', '')
+            AND REPLACE(GQ_DEPOT, ' ', '') = REPLACE(@depot, ' ', '')
+        `);
+    }
 
     await transaction.commit();
 

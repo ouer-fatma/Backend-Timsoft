@@ -14,5 +14,7 @@ router.get('/:nature/:souche/:numero/:indice', orderController.getOrderById);
 router.post('/', orderController.createOrder);
 router.put('/:nature/:souche/:numero/:indice', orderController.updateOrder);
 router.delete('/:nature/:souche/:numero/:indice', orderController.deleteOrder);
+router.get('/attente', orderController.getOrdersEnAttente);
+router.patch('/:nature/:souche/:numero/:indice/statut', orderController.marquerCommandeCommePrete);
 
 module.exports = router;
