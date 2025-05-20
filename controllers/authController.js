@@ -8,9 +8,9 @@ const { sql, poolPromise } = require('../db');
 
 // Contrôleur pour l'inscription
 const registerUser = async (req, res) => {
-  const { nom, email, motDePasse, role } = req.body;
+  const { nom, prenom, email, motDePasse, role } = req.body;
 
-  if (!nom || !email || !motDePasse || !role) {
+ if (!nom || !prenom || !email || !motDePasse || !role){
     return res.status(400).json({ message: 'Tous les champs sont obligatoires.' });
   }
 
