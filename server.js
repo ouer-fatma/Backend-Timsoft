@@ -17,7 +17,7 @@ const invoiceRoutes = require('./routes/invoice');
 const stockTransferRoutes = require('./routes/stockTransferRoutes');
 const retourRoutes = require('./routes/retour'); // 👉 nouveau fichier de routes
 
-const { poolPromise } = require('./db');
+
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -41,6 +41,7 @@ poolPromise
 // ✅ Définir les routes
 app.use('/auth', authRoutes);
 app.use('/articles', articleRoutes);
+
 app.use('/users', userRoutes);
 app.use('/orders', orderRoutes);
 app.use('/panier', panierRoutes);

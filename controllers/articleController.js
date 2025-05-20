@@ -253,3 +253,57 @@ exports.deleteArticle = async (req, res) => {
     res.status(500).json({ message: 'Erreur lors de la suppression.', error: err.message });
   }
 };
+exports.getAllFamilles = async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .query(`
+        SELECT DISTINCT GA_FAMILLENIV1 
+        FROM ARTICLE 
+        WHERE GA_FAMILLENIV1 IN ('FIL','GAR','FEM','HOM')       
+      `);
+
+    res.status(200).json(result.recordset.map(row => row.GA_FAMILLENIV1));
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur récupération des familles.', error: err.message });
+  }
+};
+
+
+
+exports.getCategoriesByFamille = async (req, res) => {
+  const { famille } = req.params;
+
+  if (!famille) return res.status(400).json({ message: 'Famille manquante.' });
+
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('famille', sql.NVarChar, famille)
+      .query(`SELECT DISTINCT GA_FAMILLENIV2 FROM ARTICLE WHERE GA_FAMILLENIV1 = @famille AND GA_FAMILLENIV2 IS NOT NULL`);
+
+    res.status(200).json(result.recordset.map(row => row.GA_FAMILLENIV2));
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur récupération des catégories.', error: err.message });
+  }
+};
+exports.getArticlesByCategorie = async (req, res) => {
+  const { categorie } = req.params;
+
+  if (!categorie) return res.status(400).json({ message: 'Catégorie manquante.' });
+
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('categorie', sql.NVarChar, categorie)
+      .query(`
+        SELECT TOP 100 * FROM ARTICLE
+        WHERE GA_FAMILLENIV2 = @categorie
+        ORDER BY GA_DATECREATION DESC
+      `);
+
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur récupération des articles par catégorie.', error: err.message });
+  }
+};
