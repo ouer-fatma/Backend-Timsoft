@@ -36,6 +36,24 @@ exports.getOrderById = async (req, res) => {
   }
 };
 
+
+
+exports.getOrdersByCodeTiers = async (req, res) => {
+  const codeTiers = req.params.codeTiers;
+
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('codeTiers', sql.NVarChar, codeTiers)
+      .query('SELECT * FROM PIECE WHERE GP_TIERS = @codeTiers ORDER BY GP_DATECREATION DESC');
+
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur récupération commandes client.', error: err.message });
+  }
+};
+
+
 exports.getOrderDetails = async (req, res) => {
   const { nature, souche, numero, indice } = req.params;
 
@@ -134,6 +152,20 @@ exports.getOrderDetails = async (req, res) => {
     });
   }
 };
+
+exports.getNextOrderNumero = async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .query(`SELECT ISNULL(MAX(GP_NUMERO), 0) + 1 AS nextNumero FROM PIECE WHERE GP_NATUREPIECEG = 'CMD'`);
+
+    res.status(200).json({ nextNumero: result.recordset[0].nextNumero }); // ✅ ← important
+  } catch (err) {
+    console.error("Erreur génération numéro commande :", err);
+    res.status(500).json({ message: 'Erreur génération numéro' });
+  }
+};
+
 
 
 // Créer une commande + lignes de commande avec calcul auto + remises

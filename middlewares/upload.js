@@ -7,7 +7,11 @@ const storage = multer.diskStorage({
     cb(null, 'uploads/');
   },
   filename: (req, file, cb) => {
-    const codeArticle = req.body.GA_CODEARTICLE?.replace(/\s+/g, '') || 'unknown';
+    const codeArticle =
+  req.body.GA_CODEARTICLE?.replace(/\s+/g, '') ||
+  req.params.id?.replace(/\s+/g, '') ||
+  'unknown';
+
     const ext = path.extname(file.originalname);
     cb(null, `${Date.now()}-${codeArticle}${ext}`);
   }
