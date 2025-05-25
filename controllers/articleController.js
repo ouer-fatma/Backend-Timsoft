@@ -6,11 +6,22 @@ const path = require('path');
 exports.getAllArticles = async (req, res) => {
   try {
     const pool = await poolPromise;
-    const articlesResult = await pool.request().query('SELECT TOP 10 * FROM ARTICLE ORDER BY GA_DATECREATION DESC');
+
+    const articlesResult = await pool.request().query(`
+      SELECT TOP 10 *
+      FROM ARTICLE
+      ORDER BY GA_DATECREATION DESC
+    `);
     const articles = articlesResult.recordset;
+
+    const uploadsPath = path.join(__dirname, '..', 'uploads');
+    const files = fs.existsSync(uploadsPath) ? fs.readdirSync(uploadsPath) : [];
+
+    const normalize = str => str?.toLowerCase()?.replace(/\s+/g, '');
 
     const articlesWithRemises = await Promise.all(
       articles.map(async (article) => {
+        // Remise
         const remiseResult = await pool.request()
           .input('codeArticle', sql.NVarChar, article.GA_CODEARTICLE)
           .query(`
@@ -20,37 +31,43 @@ exports.getAllArticles = async (req, res) => {
               AND MLR_CODECOND IS NULL
               AND MLR_DATEPIECE <= GETDATE()
           `);
-
         const remise = remiseResult.recordset[0];
 
-           // 🔍 Recherche de l'image correspondante dans /uploads
-    const uploadsPath = path.join(__dirname, '..', 'uploads');
-    const files = fs.readdirSync(uploadsPath);
-    const matchedFile = files.find(file =>
-      file.toLowerCase().includes(article.GA_CODEARTICLE.toLowerCase())
-    );
-    const imageUrl = matchedFile
-      ? `http://localhost:3000/uploads/${matchedFile}`
-      : null;
+        // Image matching
+    const matchedFile = files
+  .filter(file => normalize(file).includes(normalize(article.GA_CODEARTICLE)))
+  .sort((a, b) => {
+    const aTime = fs.statSync(path.join(uploadsPath, a)).mtime.getTime();
+    const bTime = fs.statSync(path.join(uploadsPath, b)).mtime.getTime();
+    return bTime - aTime; // image la plus récente en premier
+  })[0];
 
-      return {
-        ...article,
-        GA_IMAGE_URL: imageUrl, // ✅ image ajoutée ici
-        REMISE: remise ? {
-          MLR_REMISE: remise.MLR_REMISE,
-          DATE_EFFET: remise.MLR_DATEPIECE
-        } : null
-      };
-      
+        const imageUrl = matchedFile
+          ? `http://localhost:3000/uploads/${matchedFile}`
+          : null;
+
+        return {
+          ...article,
+          GA_IMAGE_URL: imageUrl,
+          REMISE: remise ? {
+            MLR_REMISE: remise.MLR_REMISE,
+            DATE_EFFET: remise.MLR_DATEPIECE
+          } : null
+        };
       })
     );
 
     res.status(200).json(articlesWithRemises);
 
   } catch (err) {
-    res.status(500).json({ message: 'Erreur lors de la récupération des articles.', error: err.message });
+    console.error('Erreur getAllArticles:', err);
+    res.status(500).json({
+      message: 'Erreur lors de la récupération des articles.',
+      error: err.message
+    });
   }
 };
+
 
 // ✅ 2. Récupérer un article par GA_ARTICLE (identifiant en NVARCHAR)
 exports.getArticleByGA = async (req, res) => {
@@ -205,22 +222,37 @@ exports.updateArticle = async (req, res) => {
   const { id } = req.params;
   const { GA_LIBELLE, GA_PVHT, GA_PVTTC, GA_TENUESTOCK } = req.body;
 
+    // 📥 Log image reçue
+  console.log("📥 Fichier image reçu :", req.file?.filename);
+
+  // 📦 Log données texte
+  console.log("📦 Corps reçu :", req.body);
+  const imageFile = req.file;
+
   try {
     const pool = await poolPromise;
-    const result = await pool.request()
-      .input('GA_ARTICLE', sql.NVarChar, id)
-      .input('GA_LIBELLE', sql.NVarChar, GA_LIBELLE)
-      .input('GA_PVHT', sql.Numeric(19,4), GA_PVHT)
-      .input('GA_PVTTC', sql.Numeric(19,4), GA_PVTTC)
-      .input('GA_TENUESTOCK', sql.NVarChar, GA_TENUESTOCK)
-      .query(`
-        UPDATE ARTICLE
-        SET GA_LIBELLE = @GA_LIBELLE,
-            GA_PVHT = @GA_PVHT,
-            GA_PVTTC = @GA_PVTTC,
-            GA_TENUESTOCK = @GA_TENUESTOCK
-        WHERE GA_ARTICLE = @GA_ARTICLE
-      `);
+    const request = pool.request();
+
+    request.input('GA_ARTICLE', sql.NVarChar, id);
+    request.input('GA_LIBELLE', sql.NVarChar, GA_LIBELLE);
+    request.input('GA_PVHT', sql.Numeric(19, 4), GA_PVHT);
+    request.input('GA_PVTTC', sql.Numeric(19, 4), GA_PVTTC);
+    request.input('GA_TENUESTOCK', sql.NVarChar, GA_TENUESTOCK);
+
+    // ✅ Update image file logic (optionnel)
+    if (imageFile) {
+      console.log('🖼️ Nouvelle image uploadée :', imageFile.filename);
+      // Tu peux ici stocker le nom dans une colonne ou juste garder dans /uploads/
+    }
+
+    const result = await request.query(`
+      UPDATE ARTICLE
+      SET GA_LIBELLE = @GA_LIBELLE,
+          GA_PVHT = @GA_PVHT,
+          GA_PVTTC = @GA_PVTTC,
+          GA_TENUESTOCK = @GA_TENUESTOCK
+      WHERE GA_ARTICLE = @GA_ARTICLE
+    `);
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ message: "Article non trouvé." });
@@ -229,9 +261,11 @@ exports.updateArticle = async (req, res) => {
     res.status(200).json({ message: 'Article mis à jour avec succès.' });
 
   } catch (err) {
+    console.error('❌ Erreur updateArticle:', err);
     res.status(500).json({ message: 'Erreur lors de la mise à jour.', error: err.message });
   }
 };
+
 
 // ✅ 5. Supprimer un article
 exports.deleteArticle = async (req, res) => {

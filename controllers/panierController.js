@@ -202,7 +202,6 @@ WHERE
     AND P.GP_INDICEG = @indice
 GROUP BY 
     L.GL_ARTICLE, A.GA_LIBELLE, A.GA_PVTTC
-
         `);
   
       res.status(200).json({ panier: lignesResult.recordset });

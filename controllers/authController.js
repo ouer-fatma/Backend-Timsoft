@@ -176,26 +176,19 @@ const loginUser = async (req, res) => {
 const googleSignIn = async (req, res) => {
   const token = req.body.token;
   const username = req.body.username;
-  console.log("🟢 Token reçu :", token);
-  console.log("🔵 GOOGLE_CLIENT_ID_WEB:", process.env.GOOGLE_CLIENT_ID_WEB);
-  console.log("🟠 GOOGLE_CLIENT_ID_ANDROID:", process.env.GOOGLE_CLIENT_ID_ANDROID);  
-  const client = new OAuth2Client([
-    process.env.GOOGLE_CLIENT_ID_WEB,
-    process.env.GOOGLE_CLIENT_ID_ANDROID
-  ]);
-  
+
   try {
+    const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
     const ticket = await client.verifyIdToken({
       idToken: token,
-       audience: [
-        process.env.GOOGLE_CLIENT_ID_WEB,
-        process.env.GOOGLE_CLIENT_ID_ANDROID
-      ],
+      audience: process.env.GOOGLE_CLIENT_ID,
     });
 
     const payload = ticket.getPayload();
     const email = payload.email;
     const nom = username || payload.name || email.split('@')[0];
+    const prenom = ''; // Google ne donne pas toujours le prénom séparément
 
     const config = {
       user: process.env.DB_USER,
@@ -208,32 +201,84 @@ const googleSignIn = async (req, res) => {
 
     await sql.connect(config);
 
-    const request = new sql.Request();
-    request.input('Email', sql.NVarChar, email);
-    const result = await request.query('SELECT * FROM Utilisateur WHERE Email = @Email');
+    let utilisateur;
+    const checkRequest = new sql.Request();
+    checkRequest.input('Email', sql.NVarChar, email);
+    const result = await checkRequest.query('SELECT * FROM Utilisateur WHERE Email = @Email');
 
-    let utilisateur = result.recordset[0];
-
-    if (!utilisateur) {
-      const insertRequest = new sql.Request();
-      insertRequest.input('Nom', sql.NVarChar, nom);
-      insertRequest.input('Preom', sql.NVarChar, prenom);
-      insertRequest.input('Email', sql.NVarChar, email);
-      insertRequest.input('MotDePasse', sql.NVarChar, bcrypt.hashSync('0000', 10));
-      insertRequest.input('Role', sql.NVarChar, 'client');
-      await insertRequest.query(`
-        INSERT INTO Utilisateur (Nom, Prenom, Email, MotDePasse, Role)
-        VALUES (@Nom, @Prenom @Email, @MotDePasse, @Role)
+    if (result.recordset.length === 0) {
+      // 🔁 Génération du CodeTiers
+      const codeRequest = new sql.Request();
+      const codeResult = await codeRequest.query(`
+        SELECT TOP 1 T_TIERS 
+        FROM TIERS 
+        WHERE T_TIERS LIKE 'TR%' 
+        ORDER BY TRY_CAST(SUBSTRING(T_TIERS, 3, LEN(T_TIERS)) AS INT) DESC
       `);
+
+      let newCodeTiers = 'TR001';
+      if (codeResult.recordset.length > 0) {
+        const lastCode = codeResult.recordset[0].T_TIERS;
+        const numericPart = parseInt(lastCode.slice(2)) + 1;
+        newCodeTiers = 'TR' + numericPart.toString().padStart(3, '0');
+      }
+
+      // 🔁 Insertion dans TIERS
+      const insertTiersRequest = new sql.Request();
+      insertTiersRequest.input('T_TIERS', sql.NVarChar, newCodeTiers);
+      await insertTiersRequest.query(`INSERT INTO TIERS (T_TIERS) VALUES (@T_TIERS)`);
+
+      // 🔁 Insertion dans Utilisateur
+      const hashedPassword = bcrypt.hashSync('0000', 10); // Valeur par défaut
+      const insertRequest = new sql.Request();
+      insertRequest
+        .input('Nom', sql.NVarChar, nom)
+        .input('Prenom', sql.NVarChar, prenom)
+        .input('Email', sql.NVarChar, email)
+        .input('MotDePasse', sql.NVarChar, hashedPassword)
+        .input('Role', sql.NVarChar, 'client')
+        .input('CodeTiers', sql.NVarChar, newCodeTiers)
+        .query(`
+          INSERT INTO Utilisateur (Nom, Prenom, Email, MotDePasse, Role, CodeTiers)
+          VALUES (@Nom, @Prenom, @Email, @MotDePasse, @Role, @CodeTiers)
+        `);
+
+      // 🔁 Initialiser le panier (PIECE)
+      const panierRequest = new sql.Request();
+      const resultNumero = await panierRequest.query(`
+        SELECT MAX(CAST(GP_NUMERO AS INT)) + 1 AS newNumero 
+        FROM PIECE 
+        WHERE ISNUMERIC(GP_NUMERO) = 1
+      `);
+      const newNumero = resultNumero.recordset[0].newNumero || 1;
+
+      await panierRequest
+        .input('nature', sql.NVarChar, 'PAN')
+        .input('souche', sql.NVarChar, 'PAN001')
+        .input('numero', sql.Int, newNumero)
+        .input('indice', sql.Int, 0)
+        .input('tiers', sql.NVarChar, newCodeTiers)
+        .query(`
+          INSERT INTO PIECE (GP_NATUREPIECEG, GP_SOUCHE, GP_NUMERO, GP_INDICEG, GP_TIERS, GP_DATEPIECE)
+          VALUES (@nature, @souche, @numero, @indice, @tiers, GETDATE())
+        `);
 
       const fetch = new sql.Request();
       fetch.input('Email', sql.NVarChar, email);
       const newResult = await fetch.query('SELECT * FROM Utilisateur WHERE Email = @Email');
       utilisateur = newResult.recordset[0];
+    } else {
+      utilisateur = result.recordset[0];
     }
 
     const jwtToken = jwt.sign(
-      { id: utilisateur.ID_Utilisateur, email: utilisateur.Email, role: utilisateur.Role },
+      {
+        id: utilisateur.ID_Utilisateur,
+        email: utilisateur.Email,
+        nom: utilisateur.Nom,
+        role: utilisateur.Role,
+        codeTiers: utilisateur.CodeTiers,
+      },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
@@ -245,6 +290,7 @@ const googleSignIn = async (req, res) => {
         nom: utilisateur.Nom,
         email: utilisateur.Email,
         role: utilisateur.Role,
+        codeTiers: utilisateur.CodeTiers,
       }
     });
 
@@ -252,9 +298,11 @@ const googleSignIn = async (req, res) => {
     console.error('❌ Erreur Google Sign-In:', error);
     res.status(401).json({ message: 'Échec de la vérification Google.', error: error.message });
   } finally {
-    sql.close();
+    await sql.close();
   }
 };
+
+module.exports.googleSignIn = googleSignIn;
 
 
 
