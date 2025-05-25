@@ -27,10 +27,16 @@ router.post('/', upload.single('image'), articleController.createArticle);
 router.put('/:id', articleController.updateArticle);
 router.delete('/:id', articleController.deleteArticle);
 
+router.get('/dimensions/:codeArticle', articleController.getDimensionsByArticle);
+
 
 // 🔹 Routes d'affichage par catégorie
 
 router.get('/categories/:famille', articleController.getCategoriesByFamille);
 router.get('/categorie/:categorie', articleController.getArticlesByCategorie);
+
+router.get('/articles/:codeArticle/quantite/:dim1/:dim2', articleController.getQuantiteParDimensions);
+
+
 
 module.exports = router;

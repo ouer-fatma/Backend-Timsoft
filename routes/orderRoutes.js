@@ -18,3 +18,4 @@ router.get('/attente', orderController.getOrdersEnAttente);
 router.patch('/:nature/:souche/:numero/:indice/statut', orderController.marquerCommandeCommePrete);
 
 module.exports = router;
+

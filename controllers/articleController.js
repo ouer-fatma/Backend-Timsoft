@@ -290,20 +290,174 @@ exports.getCategoriesByFamille = async (req, res) => {
 exports.getArticlesByCategorie = async (req, res) => {
   const { categorie } = req.params;
 
-  if (!categorie) return res.status(400).json({ message: 'Catégorie manquante.' });
+  if (!categorie) {
+    return res.status(400).json({ message: 'Catégorie manquante.' });
+  }
 
   try {
     const pool = await poolPromise;
+
+    // 1. Récupérer les articles
     const result = await pool.request()
       .input('categorie', sql.NVarChar, categorie)
       .query(`
-        SELECT TOP 100 * FROM ARTICLE
+        SELECT TOP 100 *
+        FROM ARTICLE
         WHERE GA_FAMILLENIV2 = @categorie
         ORDER BY GA_DATECREATION DESC
       `);
 
-    res.status(200).json(result.recordset);
+    const articles = result.recordset;
+
+    // 2. Ajouter les dimensions
+    const articlesWithDimensions = await Promise.all(
+      articles.map(async (article) => {
+        const dimensions = [];
+
+        for (let i = 1; i <= 5; i++) {
+          const codeDim = article[`GA_CODEDIM${i}`];
+          const grilleDim = article[`GA_GRILLEDIM${i}`];
+          const typeDim = article[`GA_TYPEDIM${i}`];
+
+          if (codeDim && grilleDim && typeDim) {
+            const dimResult = await pool.request()
+              .input('codeDim', sql.NVarChar, codeDim)
+              .input('grilleDim', sql.NVarChar, grilleDim)
+              .input('typeDim', sql.NVarChar, typeDim)
+              .query(`
+                SELECT GDI_TYPEDIM, GDI_LIBELLE
+                FROM DIMENSION
+                WHERE GDI_CODEDIM = @codeDim
+                  AND GDI_GRILLEDIM = @grilleDim
+                  AND GDI_TYPEDIM = @typeDim
+              `);
+
+            if (dimResult.recordset.length > 0) {
+              const dim = dimResult.recordset[0];
+              dimensions.push({
+                type: dim.GDI_TYPEDIM,
+                libelle: dim.GDI_LIBELLE,
+              });
+            }
+          }
+        }
+
+        return {
+          ...article,
+          dimensions,
+        };
+      })
+    );
+
+    res.status(200).json(articlesWithDimensions);
   } catch (err) {
-    res.status(500).json({ message: 'Erreur récupération des articles par catégorie.', error: err.message });
+    res.status(500).json({
+      message: 'Erreur récupération des articles avec dimensions.',
+      error: err.message,
+    });
+  }
+};
+
+exports.getDimensionsByArticle = async (req, res) => {
+  const { codeArticle } = req.params;
+  if (!codeArticle) {
+    return res.status(400).json({ message: 'Code article requis.' });
+  }
+
+  try {
+    const pool = await poolPromise;
+
+    // 1. Récupère toutes les lignes de l'article
+    const result = await pool.request()
+      .input('codeArticle', sql.NVarChar, codeArticle)
+      .query(`
+        SELECT GA_CODEARTICLE, GA_LIBELLE,
+               GA_CODEDIM1, GA_GRILLEDIM1,
+               GA_CODEDIM2, GA_GRILLEDIM2,
+               GA_CODEDIM3, GA_GRILLEDIM3,
+               GA_CODEDIM4, GA_GRILLEDIM4,
+               GA_CODEDIM5, GA_GRILLEDIM5
+        FROM ARTICLE
+        WHERE GA_CODEARTICLE = @codeArticle
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ message: 'Article non trouvé.' });
+    }
+
+    const articleLibelle = result.recordset[0].GA_LIBELLE;
+    const allDimensions = new Map(); // Pour éviter les doublons
+
+    // 2. Récupère toutes les combinaisons (GA_CODEDIMx, GA_GRILLEDIMx)
+    for (const row of result.recordset) {
+      for (let i = 1; i <= 5; i++) {
+        const codeDim = row[`GA_CODEDIM${i}`];
+        const grilleDim = row[`GA_GRILLEDIM${i}`];
+
+        if (codeDim && grilleDim) {
+          const key = `${codeDim}_${grilleDim}`;
+          allDimensions.set(key, { codeDim, grilleDim });
+        }
+      }
+    }
+
+    // 3. Requête sur DIMENSION pour récupérer les libellés
+    const dimensions = [];
+    for (const { codeDim, grilleDim } of allDimensions.values()) {
+      const dimResult = await pool.request()
+        .input('codeDim', sql.NVarChar, codeDim)
+        .input('grilleDim', sql.NVarChar, grilleDim)
+        .query(`
+          SELECT GDI_TYPEDIM, GDI_LIBELLE
+          FROM DIMENSION
+          WHERE GDI_CODEDIM = @codeDim AND GDI_GRILLEDIM = @grilleDim
+        `);
+
+      if (dimResult.recordset.length > 0) {
+        dimensions.push({
+          type: dimResult.recordset[0].GDI_TYPEDIM,
+          libelle: dimResult.recordset[0].GDI_LIBELLE
+        });
+      }
+    }
+
+    res.status(200).json({
+      article: articleLibelle,
+      dimensions
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      message: 'Erreur récupération des dimensions.',
+      error: err.message
+    });
+  }
+};
+exports.getQuantiteParDimensions = async (req, res) => {
+  const { codeArticle, dim1, dim2 } = req.params;
+
+  if (!codeArticle || !dim1 || !dim2) {
+    return res.status(400).json({ message: 'Paramètres requis : codeArticle, dim1, dim2' });
+  }
+
+  try {
+    const pool = await poolPromise;
+
+    const gqArticle = `${codeArticle} ${dim1}${dim2}`; // ⚠️ respecte bien l’espace
+
+    const result = await pool.request()
+      .input('gqArticle', sql.NVarChar, gqArticle)
+      .query(`
+        SELECT SUM(GQ_PHYSIQUE) AS QUANTITE
+        FROM DISPO
+        WHERE GQ_ARTICLE = @gqArticle
+          AND GQ_CLOTURE = 'X'
+      `);
+
+    const quantite = result.recordset[0]?.QUANTITE ?? 0;
+    res.status(200).json({ article: gqArticle, quantite });
+
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur récupération de la quantité.', error: err.message });
   }
 };
