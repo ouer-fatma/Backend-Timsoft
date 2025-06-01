@@ -22,6 +22,8 @@ router.post('/', orderController.createOrder);
 router.put('/:nature/:souche/:numero/:indice', orderController.updateOrder);
 router.delete('/:nature/:souche/:numero/:indice', orderController.deleteOrder);
 router.get('/attente', orderController.getOrdersEnAttente);
+router.get('/recues', checkRole('admin'), orderController.getOrdersRecues);
 router.patch('/:nature/:souche/:numero/:indice/statut', orderController.marquerCommandeCommePrete);
+router.patch('/:nature/:souche/:numero/:indice/reception', orderController.marquerCommandeCommeRecue);
 
 module.exports = router;

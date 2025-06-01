@@ -143,8 +143,15 @@ exports.processRetour = async (req, res) => {
       const lignesResult = await pool.request()
         .input('numero', sql.Int, parseInt(numeroRetour))
         .query(`
-          SELECT * FROM LIGNE
-          WHERE GL_NUMERO = @numero AND GL_NATUREPIECEG = 'FFO'
+          SELECT 
+  L.*, 
+  A.GA_CODEARTICLE, 
+  A.GA_LIBELLE,
+  A.GA_PVTTC
+FROM LIGNE L
+LEFT JOIN ARTICLE A ON A.GA_ARTICLE = L.GL_ARTICLE
+WHERE L.GL_NUMERO = @numero AND L.GL_NATUREPIECEG = 'FFO'
+
         `);
   
       const filePath = path.join(__dirname, `../invoices/retour_${numeroRetour}.pdf`);

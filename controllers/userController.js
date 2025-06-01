@@ -20,8 +20,8 @@ exports.addUser = async (req, res) => {
       .input('MotDePasse', sql.NVarChar(255), hashedPassword)
       .input('Role', sql.NVarChar(20), role)
       .query(`
-        INSERT INTO Utilisateur (Nom, Email, MotDePasse, Role)
-        VALUES (@Nom, @Email, @MotDePasse, @Role)
+        INSERT INTO Utilisateur (Nom, Prenom, Email, MotDePasse, Role)
+        VALUES (@Nom, @Prenom, @Email, @MotDePasse, @Role)
       `);
 
     res.status(201).json({ message: 'Utilisateur ajouté avec succès.' });
@@ -60,24 +60,38 @@ exports.getUserById = async (req, res) => {
   }
 };
 
-// Update user info (name, email, role)
+
 exports.updateUser = async (req, res) => {
   const { id } = req.params;
-  const { nom, email, role } = req.body;
+  const { nom, prenom, email, role, motDePasse } = req.body;
 
   try {
     const pool = await poolPromise;
-    const result = await pool.request()
+    const request = pool.request()
       .input('id', sql.Int, id)
       .input('nom', sql.NVarChar(50), nom)
       .input('prenom', sql.NVarChar(50), prenom)
       .input('email', sql.NVarChar(150), email)
-      .input('role', sql.NVarChar(20), role)
-      .query(`
-        UPDATE Utilisateur
-        SET Nom=@nom, Prenom=@prenom Email=@email, Role=@role
-        WHERE ID_Utilisateur=@id
-      `);
+      .input('role', sql.NVarChar(20), role);
+
+    // If password is provided, hash and include it
+    let updateQuery = `
+      UPDATE Utilisateur
+      SET Nom=@nom,
+          Prenom=@prenom,
+          Email=@email,
+          Role=@role
+    `;
+
+    if (motDePasse && motDePasse.trim() !== '') {
+      const hashedPassword = await bcrypt.hash(motDePasse, 10);
+      request.input('motDePasse', sql.NVarChar(255), hashedPassword);
+      updateQuery += `, MotDePasse=@motDePasse`;
+    }
+
+    updateQuery += ` WHERE ID_Utilisateur=@id`;
+
+    const result = await request.query(updateQuery);
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ message: 'Utilisateur non trouvé.' });
@@ -88,6 +102,8 @@ exports.updateUser = async (req, res) => {
     res.status(500).json({ message: 'Erreur lors de la mise à jour.', error: err.message });
   }
 };
+
+
 
 // Delete user by admin
 exports.deleteUser = async (req, res) => {

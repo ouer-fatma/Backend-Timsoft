@@ -4,6 +4,16 @@ const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { sql, poolPromise } = require('../db');
+const admin = require('firebase-admin');
+const serviceAccount = require('../firebase-service-account.json'); // mets le bon chemin
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
+}
+
+
 
 
 // Contrôleur pour l'inscription
@@ -178,17 +188,14 @@ const googleSignIn = async (req, res) => {
   const username = req.body.username;
 
   try {
-    const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const decodedToken = await admin.auth().verifyIdToken(token);
+console.log("✅ Firebase Token décodé:", decodedToken);
 
-    const ticket = await client.verifyIdToken({
-      idToken: token,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
+const email = decodedToken.email;
+const nom = username || decodedToken.name || email.split('@')[0];
+const prenom = ''; // Google ne fournit pas toujours le prénom
 
-    const payload = ticket.getPayload();
-    const email = payload.email;
-    const nom = username || payload.name || email.split('@')[0];
-    const prenom = ''; // Google ne donne pas toujours le prénom séparément
+
 
     const config = {
       user: process.env.DB_USER,
@@ -295,7 +302,9 @@ const googleSignIn = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur Google Sign-In:', error);
+    console.error('❌ Erreur Google Sign-In:', error.message);
+console.error('🧵 Stack complète :', error.stack);
+
     res.status(401).json({ message: 'Échec de la vérification Google.', error: error.message });
   } finally {
     await sql.close();

@@ -28,15 +28,19 @@ exports.generateAndDownloadInvoice = async (req, res) => {
       .input('souche', sql.NVarChar(6), souche)
       .input('numero', sql.Int, parseInt(numero))
       .input('indice', sql.NVarChar(3), indice)
-      .query(`
-        SELECT 
-          L.*, 
-          A.GA_LIBELLE, 
-          A.GA_PVTTC
-        FROM LIGNE L
-        LEFT JOIN ARTICLE A ON A.GA_ARTICLE = L.GL_ARTICLE
-        WHERE L.GL_NATUREPIECEG=@nature AND L.GL_SOUCHE=@souche AND L.GL_NUMERO=@numero AND L.GL_INDICEG=@indice
-      `);
+ .query(`
+  SELECT 
+    L.*, 
+    A.GA_LIBELLE, 
+    A.GA_PVTTC,
+    A.GA_CODEARTICLE,
+    A.GA_CODEBARRE
+  FROM LIGNE L
+  LEFT JOIN ARTICLE A ON A.GA_ARTICLE = L.GL_ARTICLE
+  WHERE L.GL_NATUREPIECEG=@nature AND L.GL_SOUCHE=@souche AND L.GL_NUMERO=@numero AND L.GL_INDICEG=@indice
+`)
+
+
 
     const lignes = [];
 
@@ -133,6 +137,7 @@ try {
         L.*, 
         A.GA_LIBELLE, 
         A.GA_PVTTC
+        A.GA_CODEARTICLE
       FROM LIGNE L
       LEFT JOIN ARTICLE A ON A.GA_ARTICLE = L.GL_ARTICLE
       WHERE L.GL_NATUREPIECEG=@nature AND L.GL_SOUCHE=@souche AND L.GL_NUMERO=@numero AND L.GL_INDICEG=@indice
