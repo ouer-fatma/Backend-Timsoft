@@ -171,7 +171,7 @@ exports.getNextOrderNumero = async (req, res) => {
 // Créer une commande + lignes de commande avec calcul auto + remises
 exports.createOrder = async (req, res) => {
   const {
-    GP_NATUREPIECEG = 'CC',
+    GP_NATUREPIECEG = 'CC' = 'CC', // Valeur par défaut corrigée
     GP_SOUCHE,
     GP_INDICEG = 1,
     GP_DATECREATION,
@@ -187,7 +187,7 @@ exports.createOrder = async (req, res) => {
     return res.status(400).json({ message: 'Mode de livraison ou dépôt retrait manquant.' });
   }
 
-  if (!GP_SOUCHE || !GP_DATECREATION) {
+  if (!GP_SOUCHE || !GP_NUMERO || !GP_INDICEG || !GP_DATECREATION) {
     return res.status(400).json({ message: 'Champs obligatoires manquants.' });
   }
 
@@ -325,6 +325,7 @@ exports.createOrder = async (req, res) => {
         ) VALUES (
           @GP_NATUREPIECEG, @GP_SOUCHE, @GP_NUMERO, @GP_INDICEG,
           @GP_TIERS, @GP_TOTALHT, @GP_TOTALTTC, @GP_DATECREATION,
+         
           @GP_DEPOT, @GP_LIBRETIERS1, @GP_STATUTPIECE
         )
       `);
@@ -388,6 +389,7 @@ exports.createOrder = async (req, res) => {
     });
   }
 };
+
 
 
 
