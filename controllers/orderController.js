@@ -171,32 +171,25 @@ exports.getNextOrderNumero = async (req, res) => {
 // Créer une commande + lignes de commande avec calcul auto + remises
 exports.createOrder = async (req, res) => {
   const {
-    GP_NATUREPIECEG,
+    GP_NATUREPIECEG = 'CC', // Valeur par défaut corrigée
     GP_SOUCHE,
     GP_NUMERO,
     GP_INDICEG,
     GP_DATECREATION,
     GP_LIBRETIERS1,
-    GP_DEPOT,
-    lignes = []
+    GP_DEPOT
   } = req.body;
 
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ message: "Utilisateur non authentifié." });
 
   const isRetrait = GP_LIBRETIERS1?.startsWith('S');
-  const isLivraison = GP_LIBRETIERS1 === 'LOC';
-
   if (!GP_LIBRETIERS1 || (isRetrait && !GP_DEPOT)) {
     return res.status(400).json({ message: 'Mode de livraison ou dépôt retrait manquant.' });
   }
 
-  if (!GP_NATUREPIECEG || !GP_SOUCHE || !GP_NUMERO || !GP_INDICEG || !GP_DATECREATION) {
+  if (!GP_SOUCHE || !GP_NUMERO || !GP_INDICEG || !GP_DATECREATION) {
     return res.status(400).json({ message: 'Champs obligatoires manquants.' });
-  }
-
-  if (!Array.isArray(lignes) || lignes.length === 0) {
-    return res.status(400).json({ message: 'Lignes de commande invalides ou absentes.' });
   }
 
   try {
@@ -206,21 +199,50 @@ exports.createOrder = async (req, res) => {
       .input('id', sql.Int, userId)
       .query('SELECT CodeTiers FROM Utilisateur WHERE ID_Utilisateur = @id');
 
-    if (userResult.recordset.length === 0 || !userResult.recordset[0].CodeTiers) {
-      return res.status(400).json({ message: "CodeTiers manquant pour l'utilisateur." });
+    const GP_TIERS = userResult.recordset[0]?.CodeTiers;
+    if (!GP_TIERS) return res.status(400).json({ message: "CodeTiers manquant pour l'utilisateur." });
+
+    const panierResult = await pool.request()
+      .input('codeTiers', sql.NVarChar, GP_TIERS)
+      .query(`
+        SELECT TOP 1 GP_SOUCHE, GP_NUMERO, GP_INDICEG
+        FROM PIECE
+        WHERE GP_NATUREPIECEG = 'PAN' AND GP_TIERS = @codeTiers
+        ORDER BY GP_DATEPIECE DESC
+      `);
+
+    if (panierResult.recordset.length === 0) {
+      return res.status(404).json({ message: 'Aucun panier trouvé pour ce client.' });
     }
 
-    const GP_TIERS = userResult.recordset[0].CodeTiers;
+    const { GP_SOUCHE: PAN_SOUCHE, GP_NUMERO: PAN_NUMERO, GP_INDICEG: PAN_INDICEG } = panierResult.recordset[0];
+
+    const lignesResult = await pool.request()
+      .input('nature', sql.NVarChar, 'PAN')
+      .input('souche', sql.NVarChar, PAN_SOUCHE)
+      .input('numero', sql.BigInt, PAN_NUMERO)
+      .input('indice', sql.NVarChar, PAN_INDICEG.toString())
+      .input('tiers', sql.NVarChar, GP_TIERS)
+      .query(`
+        SELECT * FROM LIGNE
+        WHERE GL_NATUREPIECEG = @nature AND GL_SOUCHE = @souche
+          AND GL_NUMERO = @numero AND GL_INDICEG = @indice
+          AND GL_TIERS = @tiers
+      `);
+
+    const lignes = lignesResult.recordset;
+    if (!Array.isArray(lignes) || lignes.length === 0) {
+      return res.status(400).json({ message: 'Panier vide.' });
+    }
+
     let GP_TOTALHT = 0;
     let GP_TOTALTTC = 0;
     const lignesAvecPrixEtRemise = [];
-    let commandeStatut = 'ENR'; // ENR = Enregistrée, ATT = En attente
+    let commandeStatut = 'ENR';
 
     if (isRetrait) {
       for (const ligne of lignes) {
         const { GL_ARTICLE, GL_QTEFACT } = ligne;
-        if (!GL_ARTICLE || !GL_QTEFACT) continue;
-
         const checkStock = await pool.request()
           .input('article', sql.NVarChar(50), GL_ARTICLE.trim())
           .input('depot', sql.NVarChar(6), GP_DEPOT.trim())
@@ -232,29 +254,20 @@ exports.createOrder = async (req, res) => {
           `);
 
         const { PHYSIQUE = 0, RESERVECLI = 0 } = checkStock.recordset[0] || {};
-        const disponible = PHYSIQUE - RESERVECLI;
-
-        if (disponible < GL_QTEFACT) {
+        if ((PHYSIQUE - RESERVECLI) < GL_QTEFACT) {
           commandeStatut = 'ATT';
-          break; // Un seul article en rupture suffit à bloquer la validation
+          break;
         }
       }
     }
 
     for (const ligne of lignes) {
       const { GL_ARTICLE, GL_QTEFACT } = ligne;
-      if (!GL_ARTICLE || !GL_QTEFACT) continue;
-
       const prixResult = await pool.request()
         .input('code', sql.NVarChar(50), GL_ARTICLE)
         .query('SELECT GA_PVHT, GA_PVTTC FROM ARTICLE WHERE GA_ARTICLE = @code');
 
-      if (prixResult.recordset.length === 0) {
-        return res.status(404).json({ message: `Article non trouvé: ${GL_ARTICLE}` });
-      }
-
-      const { GA_PVHT, GA_PVTTC } = prixResult.recordset[0];
-
+      const { GA_PVHT = 0, GA_PVTTC = 0 } = prixResult.recordset[0] || {};
       const remiseResult = await pool.request()
         .input('gaArticle', sql.NVarChar(50), GL_ARTICLE.trim())
         .input('codeTiers', sql.NVarChar(50), GP_TIERS.trim())
@@ -286,7 +299,7 @@ exports.createOrder = async (req, res) => {
     await new sql.Request(transaction)
       .input('GP_NATUREPIECEG', sql.NVarChar(3), GP_NATUREPIECEG)
       .input('GP_SOUCHE', sql.NVarChar(6), GP_SOUCHE)
-      .input('GP_NUMERO', sql.Int, GP_NUMERO)
+      .input('GP_NUMERO', sql.BigInt, GP_NUMERO)
       .input('GP_INDICEG', sql.Int, GP_INDICEG)
       .input('GP_TIERS', sql.NVarChar(50), GP_TIERS)
       .input('GP_TOTALHT', sql.Numeric(19, 4), GP_TOTALHT)
@@ -298,41 +311,58 @@ exports.createOrder = async (req, res) => {
       .query(`
         INSERT INTO PIECE (
           GP_NATUREPIECEG, GP_SOUCHE, GP_NUMERO, GP_INDICEG,
-          GP_TIERS, GP_TOTALHT, GP_TOTALTTC, GP_DATECREATION, GP_DEPOT, GP_LIBRETIERS1, GP_STATUTPIECE
+          GP_TIERS, GP_TOTALHT, GP_TOTALTTC, GP_DATECREATION,
+          GP_DEPOT, GP_LIBRETIERS1, GP_STATUTPIECE
         ) VALUES (
           @GP_NATUREPIECEG, @GP_SOUCHE, @GP_NUMERO, @GP_INDICEG,
-          @GP_TIERS, @GP_TOTALHT, @GP_TOTALTTC, @GP_DATECREATION, @GP_DEPOT, @GP_LIBRETIERS1, @GP_STATUTPIECE
+          @GP_TIERS, @GP_TOTALHT, @GP_TOTALTTC, @GP_DATECREATION,
+          @GP_DEPOT, @GP_LIBRETIERS1, @GP_STATUTPIECE
         )
       `);
 
     for (let i = 0; i < lignesAvecPrixEtRemise.length; i++) {
-      const { GL_ARTICLE, GL_QTEFACT, remise, remiseMontant } = lignesAvecPrixEtRemise[i];
-      const GL_NUMLIGNE = i + 1;
+      const { GL_ARTICLE, GL_QTEFACT, remise, remiseMontant, GL_CODESDIM, GL_LIBELLE, GL_LIBCOMPL } = lignesAvecPrixEtRemise[i];
 
       await new sql.Request(transaction)
         .input('GL_NATUREPIECEG', sql.NVarChar(3), GP_NATUREPIECEG)
         .input('GL_SOUCHE', sql.NVarChar(6), GP_SOUCHE)
-        .input('GL_NUMERO', sql.Int, GP_NUMERO)
+        .input('GL_NUMERO', sql.BigInt, GP_NUMERO)
         .input('GL_INDICEG', sql.Int, GP_INDICEG)
         .input('GL_ARTICLE', sql.NVarChar(50), GL_ARTICLE)
         .input('GL_QTEFACT', sql.Numeric(19, 4), GL_QTEFACT)
-        .input('GL_NUMLIGNE', sql.Int, GL_NUMLIGNE)
+        .input('GL_NUMLIGNE', sql.Int, i + 1)
         .input('GL_REMISELIGNE', sql.Float, remise)
         .input('GL_TOTREMLIGNE', sql.Numeric(19, 4), remiseMontant)
+        .input('GL_CODESDIM', sql.NVarChar(50), GL_CODESDIM ?? '')
+        .input('GL_LIBELLE', sql.NVarChar(255), GL_LIBELLE ?? '')
+        .input('GL_LIBCOMPL', sql.NVarChar(255), GL_LIBCOMPL ?? '')
+        .input('GL_TIERS', sql.NVarChar(50), GP_TIERS)
         .query(`
           INSERT INTO LIGNE (
             GL_NATUREPIECEG, GL_SOUCHE, GL_NUMERO, GL_INDICEG,
             GL_ARTICLE, GL_QTEFACT, GL_NUMLIGNE,
-            GL_REMISELIGNE, GL_TOTREMLIGNE
+            GL_REMISELIGNE, GL_TOTREMLIGNE,
+            GL_CODESDIM, GL_LIBELLE, GL_LIBCOMPL, GL_TIERS
           ) VALUES (
             @GL_NATUREPIECEG, @GL_SOUCHE, @GL_NUMERO, @GL_INDICEG,
             @GL_ARTICLE, @GL_QTEFACT, @GL_NUMLIGNE,
-            @GL_REMISELIGNE, @GL_TOTREMLIGNE
+            @GL_REMISELIGNE, @GL_TOTREMLIGNE,
+            @GL_CODESDIM, @GL_LIBELLE, @GL_LIBCOMPL, @GL_TIERS
           )
         `);
     }
 
+    if (commandeStatut !== 'ATT') {
+      await new sql.Request(transaction)
+        .input('codeTiers', sql.NVarChar(50), GP_TIERS)
+        .query(`
+          DELETE FROM LIGNE WHERE GL_NATUREPIECEG = 'PAN' AND GL_TIERS = @codeTiers;
+          DELETE FROM PIECE WHERE GP_NATUREPIECEG = 'PAN' AND GP_TIERS = @codeTiers;
+        `);
+    }
+
     await transaction.commit();
+
     res.status(201).json({
       message: commandeStatut === 'ATT'
         ? '🕐 Commande enregistrée mais en attente de stock.'
@@ -349,6 +379,7 @@ exports.createOrder = async (req, res) => {
     });
   }
 };
+
 
 // Modifier une commande
 exports.updateOrder = async (req, res) => {

@@ -477,21 +477,198 @@ exports.getQuantiteParDimensions = async (req, res) => {
   try {
     const pool = await poolPromise;
 
-    const gqArticle = `${codeArticle} ${dim1}${dim2}`; // ⚠️ respecte bien l’espace
-
     const result = await pool.request()
-      .input('gqArticle', sql.NVarChar, gqArticle)
+      .input('codeArticle', sql.NVarChar, codeArticle)
+      .input('dim1Libelle', sql.NVarChar, dim1)
+      .input('dim2Libelle', sql.NVarChar, dim2)
       .query(`
-        SELECT SUM(GQ_PHYSIQUE) AS QUANTITE
-        FROM DISPO
-        WHERE GQ_ARTICLE = @gqArticle
-          AND GQ_CLOTURE = 'X'
+        SELECT SUM(D.GQ_PHYSIQUE) AS QUANTITE
+        FROM DISPO D
+        JOIN ARTICLE A ON D.GQ_ARTICLE = A.GA_ARTICLE
+        LEFT JOIN DIMENSION D1 ON D1.GDI_CODEDIM = A.GA_CODEDIM1 
+                                AND D1.GDI_TYPEDIM = 'DI1' 
+                                AND D1.GDI_GRILLEDIM = A.GA_GRILLEDIM1
+        LEFT JOIN DIMENSION D2 ON D2.GDI_CODEDIM = A.GA_CODEDIM2 
+                                AND D2.GDI_TYPEDIM = 'DI2' 
+                                AND D2.GDI_GRILLEDIM = A.GA_GRILLEDIM2
+        WHERE A.GA_CODEARTICLE = @codeArticle
+          AND D1.GDI_LIBELLE = @dim1Libelle
+          AND D2.GDI_LIBELLE = @dim2Libelle
+          AND D.GQ_CLOTURE = 'X'
       `);
 
     const quantite = result.recordset[0]?.QUANTITE ?? 0;
-    res.status(200).json({ article: gqArticle, quantite });
+
+    res.status(200).json({
+      article: codeArticle,
+      dim1,
+      dim2,
+      quantite
+    });
 
   } catch (err) {
-    res.status(500).json({ message: 'Erreur récupération de la quantité.', error: err.message });
+    res.status(500).json({
+      message: 'Erreur lors de la récupération de la quantité.',
+      error: err.message
+    });
   }
 };
+exports.getArticleDetails = async (req, res) => {
+  const { codeArticle } = req.params;
+  const { dim1, dim2 } = req.query;
+
+  if (!codeArticle || !dim1 || !dim2) {
+    return res.status(400).json({ message: 'Paramètres requis : codeArticle, dim1, dim2' });
+  }
+
+  try {
+    const pool = await poolPromise;
+
+    const result = await pool.request()
+      .input('codeArticle', sql.NVarChar, codeArticle)
+      .input('dim1Libelle', sql.NVarChar, dim1)
+      .input('dim2Libelle', sql.NVarChar, dim2)
+      .query(`
+        SELECT 
+          A.GA_CODEARTICLE AS codeArticle,
+          A.GA_LIBELLE AS libelle,
+          A.GA_PVTTC AS prixTTC,
+          D1.GDI_LIBELLE AS dim1_libelle,
+          D2.GDI_LIBELLE AS dim2_libelle,
+          SUM(D.GQ_PHYSIQUE) AS quantite
+        FROM ARTICLE A
+        JOIN DISPO D ON A.GA_ARTICLE = D.GQ_ARTICLE
+        LEFT JOIN DIMENSION D1 
+          ON D1.GDI_CODEDIM = A.GA_CODEDIM1 
+          AND D1.GDI_TYPEDIM = 'DI1' 
+          AND D1.GDI_GRILLEDIM = A.GA_GRILLEDIM1
+        LEFT JOIN DIMENSION D2 
+          ON D2.GDI_CODEDIM = A.GA_CODEDIM2 
+          AND D2.GDI_TYPEDIM = 'DI2' 
+          AND D2.GDI_GRILLEDIM = A.GA_GRILLEDIM2
+        WHERE A.GA_CODEARTICLE = @codeArticle
+          AND D1.GDI_LIBELLE = @dim1Libelle
+          AND D2.GDI_LIBELLE = @dim2Libelle
+          AND D.GQ_CLOTURE = 'X'
+        GROUP BY 
+          A.GA_CODEARTICLE, A.GA_LIBELLE, A.GA_PVTTC, 
+          D1.GDI_LIBELLE, D2.GDI_LIBELLE
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ message: 'Aucune donnée trouvée.' });
+    }
+
+    res.status(200).json(result.recordset[0]);
+
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur lors de la récupération.', error: err.message });
+  }
+};
+
+
+exports.getDepotsByArticleDimensions = async (req, res) => {
+  const { codeArticle } = req.params;
+  const { dim1, dim2 } = req.query;
+
+  if (!codeArticle || !dim1 || !dim2) {
+    return res.status(400).json({
+      message: 'Paramètres requis : codeArticle, dim1, dim2'
+    });
+  }
+
+  try {
+    const pool = await poolPromise;
+
+    const result = await pool.request()
+      .input('codeArticle', sql.NVarChar, codeArticle)
+      .input('dim1Libelle', sql.NVarChar, dim1)
+      .input('dim2Libelle', sql.NVarChar, dim2)
+      .query(`
+        SELECT 
+          D.GQ_DEPOT AS depot,
+          SUM(D.GQ_PHYSIQUE) AS quantite
+        FROM ARTICLE A
+        JOIN DISPO D ON A.GA_ARTICLE = D.GQ_ARTICLE AND D.GQ_CLOTURE = 'X'
+        LEFT JOIN DIMENSION D1 
+          ON D1.GDI_CODEDIM = A.GA_CODEDIM1 
+          AND D1.GDI_TYPEDIM = 'DI1' 
+          AND D1.GDI_GRILLEDIM = A.GA_GRILLEDIM1
+        LEFT JOIN DIMENSION D2 
+          ON D2.GDI_CODEDIM = A.GA_CODEDIM2 
+          AND D2.GDI_TYPEDIM = 'DI2' 
+          AND D2.GDI_GRILLEDIM = A.GA_GRILLEDIM2
+        WHERE A.GA_CODEARTICLE = @codeArticle
+          AND D1.GDI_LIBELLE = @dim1Libelle
+          AND D2.GDI_LIBELLE = @dim2Libelle
+        GROUP BY D.GQ_DEPOT
+      `);
+
+    res.status(200).json({
+      article: codeArticle,
+      dim1,
+      dim2,
+      depots: result.recordset
+    });
+
+  } catch (err) {
+    console.error("❌ Erreur getDepotsByArticleDimensions:", err);
+    res.status(500).json({ message: "Erreur serveur", error: err.message });
+  }
+};
+
+exports.getArticlesComplet = async (req, res) => {
+  const { limit = 100, offset = 0 } = req.query;
+
+  try {
+    const pool = await poolPromise;
+
+    const result = await pool.request()
+      .input('limit', sql.Int, parseInt(limit))
+      .input('offset', sql.Int, parseInt(offset))
+      .query(`
+        WITH ArticleData AS (
+          SELECT
+            LTRIM(RTRIM(A.GA_CODEBARRE)) AS GA_CODEBARRE,
+            A.GA_CODEARTICLE AS GA_CODEARTICLE1,
+            A.GA_ARTICLE AS GA_ARTICLE1,
+            A.GA_LIBELLE AS GA_LIBELLE1,
+            A.GA_FAMILLENIV1,
+            A.GA_PVTTC,
+            D1.GDI_LIBELLE AS GA_CODEDIM1,
+            D2.GDI_LIBELLE AS GA_CODEDIM2,
+            ISNULL(SUM(D.GQ_PHYSIQUE), 0) AS GQ_PHYSIQUE,
+            ROW_NUMBER() OVER (ORDER BY A.GA_LIBELLE) AS RowNum
+          FROM ARTICLE A
+          LEFT JOIN DISPO D 
+            ON A.GA_ARTICLE = D.GQ_ARTICLE AND D.GQ_CLOTURE = 'X'
+          LEFT JOIN DIMENSION D1 
+            ON D1.GDI_CODEDIM = A.GA_CODEDIM1 
+            AND A.GA_GRILLEDIM1 = D1.GDI_GRILLEDIM 
+            AND D1.GDI_TYPEDIM = 'DI1'
+          LEFT JOIN DIMENSION D2 
+            ON D2.GDI_CODEDIM = A.GA_CODEDIM2 
+            AND A.GA_GRILLEDIM2 = D2.GDI_GRILLEDIM 
+            AND D2.GDI_TYPEDIM = 'DI2'
+          GROUP BY 
+            A.GA_CODEBARRE, A.GA_CODEARTICLE, A.GA_ARTICLE,
+            A.GA_LIBELLE, A.GA_FAMILLENIV1, A.GA_PVTTC,
+            D1.GDI_LIBELLE, D2.GDI_LIBELLE
+        )
+        SELECT * 
+        FROM ArticleData
+        WHERE GA_CODEBARRE IS NOT NULL AND GA_CODEBARRE <> ''
+          AND RowNum BETWEEN @offset + 1 AND @offset + @limit
+      `);
+
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    console.error('❌ Erreur getArticlesComplet:', err);
+    res.status(500).json({
+      message: 'Erreur récupération des articles complets.',
+      error: err.message,
+    });
+  }
+};
+
+
