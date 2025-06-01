@@ -27,3 +27,4 @@ router.patch('/:nature/:souche/:numero/:indice/statut', orderController.marquerC
 router.patch('/:nature/:souche/:numero/:indice/reception', orderController.marquerCommandeCommeRecue);
 
 module.exports = router;
+

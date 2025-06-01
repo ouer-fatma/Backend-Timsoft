@@ -14,4 +14,4 @@ router.delete('/retirer', panierController.retirerDuPanier);
 
 
 
-module.exports = router;
+module.exports = router;   
