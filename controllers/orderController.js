@@ -171,10 +171,9 @@ exports.getNextOrderNumero = async (req, res) => {
 // Créer une commande + lignes de commande avec calcul auto + remises
 exports.createOrder = async (req, res) => {
   const {
-    GP_NATUREPIECEG = 'CC', // Valeur par défaut corrigée
+    GP_NATUREPIECEG = 'CC',
     GP_SOUCHE,
-    GP_NUMERO,
-    GP_INDICEG,
+    GP_INDICEG = 1,
     GP_DATECREATION,
     GP_LIBRETIERS1,
     GP_DEPOT
@@ -188,7 +187,7 @@ exports.createOrder = async (req, res) => {
     return res.status(400).json({ message: 'Mode de livraison ou dépôt retrait manquant.' });
   }
 
-  if (!GP_SOUCHE || !GP_NUMERO || !GP_INDICEG || !GP_DATECREATION) {
+  if (!GP_SOUCHE || !GP_DATECREATION) {
     return res.status(400).json({ message: 'Champs obligatoires manquants.' });
   }
 
@@ -201,6 +200,16 @@ exports.createOrder = async (req, res) => {
 
     const GP_TIERS = userResult.recordset[0]?.CodeTiers;
     if (!GP_TIERS) return res.status(400).json({ message: "CodeTiers manquant pour l'utilisateur." });
+
+    // Générer un numéro unique de commande
+    const numeroResult = await pool.request()
+      .input('nature', sql.NVarChar(3), GP_NATUREPIECEG)
+      .query(`
+        SELECT ISNULL(MAX(GP_NUMERO), 0) + 1 AS nextNumero
+        FROM PIECE WHERE GP_NATUREPIECEG = @nature
+      `);
+
+    const GP_NUMERO = numeroResult.recordset[0].nextNumero;
 
     const panierResult = await pool.request()
       .input('codeTiers', sql.NVarChar, GP_TIERS)
@@ -379,6 +388,7 @@ exports.createOrder = async (req, res) => {
     });
   }
 };
+
 
 
 // Modifier une commande
