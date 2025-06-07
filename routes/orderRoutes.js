@@ -10,7 +10,7 @@ router.use(verifyToken);
 
     
 // Routes
-router.get('/', checkRole('admin'), orderController.getAllOrders); // admin seulement
+router.get('/', orderController.getAllOrders); // admin seulement
 router.get('/details/:nature/:souche/:numero/:indice', orderController.getOrderDetails);
 router.get('/:nature/:souche/:numero/:indice', orderController.getOrderById);
 router.get('/client/:codeTiers', orderController.getOrdersByCodeTiers);
@@ -23,8 +23,22 @@ router.put('/:nature/:souche/:numero/:indice', orderController.updateOrder);
 router.delete('/:nature/:souche/:numero/:indice', orderController.deleteOrder);
 router.get('/attente', orderController.getOrdersEnAttente);
 router.get('/recues', checkRole('admin'), orderController.getOrdersRecues);
+// Marquer comme enregistrée (déjà présent)
 router.patch('/:nature/:souche/:numero/:indice/statut', orderController.marquerCommandeCommePrete);
+
+// Marquer comme expédiée
+router.patch('/:nature/:souche/:numero/:indice/expedition', orderController.marquerCommandeCommeExpediee);
+
+
+// Marquer comme livrée
+router.patch('/:nature/:souche/:numero/:indice/livraison', orderController.marquerCommandeCommeLivree);
+
+// Marquer comme reçue (déjà présent)
 router.patch('/:nature/:souche/:numero/:indice/reception', orderController.marquerCommandeCommeRecue);
+
+// Annuler la commande
+router.patch('/:nature/:souche/:numero/:indice/annuler', orderController.annulerCommande);
+
 
 module.exports = router;
 

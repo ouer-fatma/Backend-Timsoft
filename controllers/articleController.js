@@ -2,45 +2,50 @@ const { sql, poolPromise } = require('../db');
 const fs = require('fs');
 const path = require('path');
 
-// ✅ 1. Récupérer les 100 premiers articles avec leur remise générale
+
 exports.getAllArticles = async (req, res) => {
   try {
     const pool = await poolPromise;
 
+    // 1. Récupérer les 100 derniers articles
     const articlesResult = await pool.request().query(`
       SELECT TOP 10 *
       FROM ARTICLE
       ORDER BY GA_DATECREATION DESC
     `);
+
     const articles = articlesResult.recordset;
 
+    // 2. Lire les fichiers d'images pour matching local
     const uploadsPath = path.join(__dirname, '..', 'uploads');
     const files = fs.existsSync(uploadsPath) ? fs.readdirSync(uploadsPath) : [];
 
     const normalize = str => str?.toLowerCase()?.replace(/\s+/g, '');
 
-    const articlesWithRemises = await Promise.all(
+    const articlesWithExtras = await Promise.all(
       articles.map(async (article) => {
-        // Remise
-        const remiseResult = await pool.request()
+        // 3. Récupérer la remise générale depuis LIGNEREMISE (la plus récente)
+        const remiseQuery = await pool.request()
           .input('codeArticle', sql.NVarChar, article.GA_CODEARTICLE)
           .query(`
-            SELECT MLR_REMISE, MLR_DATEPIECE
-            FROM REMISE
+            SELECT TOP 1 MLR_REMISE, MLR_DATEPIECE
+            FROM LIGNEREMISE
             WHERE MLR_ORGREMISE = @codeArticle
               AND MLR_CODECOND IS NULL
               AND MLR_DATEPIECE <= GETDATE()
+            ORDER BY MLR_DATEPIECE DESC
           `);
-        const remise = remiseResult.recordset[0];
 
-        // Image matching
-    const matchedFile = files
-  .filter(file => normalize(file).includes(normalize(article.GA_CODEARTICLE)))
-  .sort((a, b) => {
-    const aTime = fs.statSync(path.join(uploadsPath, a)).mtime.getTime();
-    const bTime = fs.statSync(path.join(uploadsPath, b)).mtime.getTime();
-    return bTime - aTime; // image la plus récente en premier
-  })[0];
+        const remise = remiseQuery.recordset[0];
+
+        // 4. Image match (plus récente)
+        const matchedFile = files
+          .filter(file => normalize(file).includes(normalize(article.GA_CODEARTICLE)))
+          .sort((a, b) => {
+            const aTime = fs.statSync(path.join(uploadsPath, a)).mtime.getTime();
+            const bTime = fs.statSync(path.join(uploadsPath, b)).mtime.getTime();
+            return bTime - aTime;
+          })[0];
 
         const imageUrl = matchedFile
           ? `http://localhost:3000/uploads/${matchedFile}`
@@ -50,23 +55,24 @@ exports.getAllArticles = async (req, res) => {
           ...article,
           GA_IMAGE_URL: imageUrl,
           REMISE: remise ? {
-            MLR_REMISE: remise.MLR_REMISE,
-            DATE_EFFET: remise.MLR_DATEPIECE
+            pourcentage: remise.MLR_REMISE,
+            dateEffet: remise.MLR_DATEPIECE
           } : null
         };
       })
     );
 
-    res.status(200).json(articlesWithRemises);
+    res.status(200).json(articlesWithExtras);
 
   } catch (err) {
-    console.error('Erreur getAllArticles:', err);
+    console.error('❌ Erreur getAllArticles:', err);
     res.status(500).json({
       message: 'Erreur lors de la récupération des articles.',
       error: err.message
     });
   }
 };
+
 
 
 // ✅ 2. Récupérer un article par GA_ARTICLE (identifiant en NVARCHAR)
@@ -165,128 +171,164 @@ exports.searchArticles = async (req, res) => {
 
 // ✅ 3. Créer un nouvel article
 
-  exports.createArticle = async (req, res) => {
-    const GA_ARTICLE = req.body.GA_ARTICLE?.trim();
-    const GA_CODEARTICLE = req.body.GA_CODEARTICLE?.trim();
-    const GA_CODEBARRE = req.body.GA_CODEBARRE?.trim() || '';
-    const GA_LIBELLE = req.body.GA_LIBELLE?.trim();
-    const GA_PVHT = parseFloat(req.body.GA_PVHT) || 0;
-    const GA_PVTTC = parseFloat(req.body.GA_PVTTC) || 0;
-    const GA_TENUESTOCK = req.body.GA_TENUESTOCK?.trim() || 'O';
-    const imageFile = req.file;
-    
-    if (!GA_ARTICLE || !GA_CODEARTICLE || !GA_LIBELLE) {
-      return res.status(400).json({ message: 'Champs obligatoires manquants.' });
-    }
-    
-  
-    try {
-      const pool = await poolPromise;
-  
-      await pool.request()
-        .input('GA_ARTICLE', sql.NVarChar, GA_ARTICLE)
-        .input('GA_CODEARTICLE', sql.NVarChar, GA_CODEARTICLE)
-        .input('GA_CODEBARRE', sql.NVarChar, GA_CODEBARRE || '')
-        .input('GA_LIBELLE', sql.NVarChar, GA_LIBELLE)
-        .input('GA_PVHT', sql.Numeric(19, 4), GA_PVHT || 0)
-        .input('GA_PVTTC', sql.Numeric(19, 4), GA_PVTTC || 0)
-        .input('GA_TENUESTOCK', sql.NVarChar, GA_TENUESTOCK || 'O')
-        .query(`
-          INSERT INTO ARTICLE (
-            GA_ARTICLE, GA_CODEARTICLE, GA_CODEBARRE, GA_LIBELLE,
-            GA_PVHT, GA_PVTTC, GA_TENUESTOCK, GA_DATECREATION
-          )
-          VALUES (
-            @GA_ARTICLE, @GA_CODEARTICLE, @GA_CODEBARRE, @GA_LIBELLE,
-            @GA_PVHT, @GA_PVTTC, @GA_TENUESTOCK, GETDATE()
-          )
-        `);
+exports.createArticle = async (req, res) => {
+  const GA_ARTICLE = req.body.GA_ARTICLE?.trim();
+  const GA_CODEARTICLE = req.body.GA_CODEARTICLE?.trim();
+  const GA_CODEBARRE = req.body.GA_CODEBARRE?.trim() || '';
+  const GA_LIBELLE = req.body.GA_LIBELLE?.trim();
+  const GA_PVHT = parseFloat(req.body.GA_PVHT) || 0;
+  const GA_PVTTC = parseFloat(req.body.GA_PVTTC) || 0;
+  const GA_TENUESTOCK = req.body.GA_TENUESTOCK?.trim() || 'O';
 
-        const imageURL = imageFile ? `http://localhost:3000/uploads/${imageFile.filename}` : null;
-  
-      res.status(201).json({ message: 'Article créé avec succès.', 
-        image: imageURL
-       });
-  
-    } catch (err) { 
-      res.status(500).json({
-        message: 'Erreur lors de la création de l\'article.',
-        error: err.message
-      });
-    }
-  };
+  // Champs supplémentaires
+  const GA_FAMILLENIV1 = req.body.GA_FAMILLENIV1?.trim() || '';
+  const GA_CODEDIM1 = req.body.GA_CODEDIM1?.trim() || '';
+  const GA_GRILLEDIM1 = req.body.GA_GRILLEDIM1?.trim() || '';
+  const GA_CODEDIM2 = req.body.GA_CODEDIM2?.trim() || '';
+  const GA_GRILLEDIM2 = req.body.GA_GRILLEDIM2?.trim() || '';
+  const imageFile = req.file;
+
+  if (!GA_ARTICLE || !GA_CODEARTICLE || !GA_LIBELLE) {
+    return res.status(400).json({ message: 'Champs obligatoires manquants.' });
+  }
+
+  try {
+    const pool = await poolPromise;
+
+    await pool.request()
+      .input('GA_ARTICLE', sql.NVarChar, GA_ARTICLE)
+      .input('GA_CODEARTICLE', sql.NVarChar, GA_CODEARTICLE)
+      .input('GA_CODEBARRE', sql.NVarChar, GA_CODEBARRE)
+      .input('GA_LIBELLE', sql.NVarChar, GA_LIBELLE)
+      .input('GA_PVHT', sql.Numeric(19, 4), GA_PVHT)
+      .input('GA_PVTTC', sql.Numeric(19, 4), GA_PVTTC)
+      .input('GA_TENUESTOCK', sql.NVarChar, GA_TENUESTOCK)
+      .input('GA_FAMILLENIV1', sql.NVarChar, GA_FAMILLENIV1) // ✅ Ne surtout pas limiter la taille ici
+      .input('GA_CODEDIM1', sql.NVarChar, GA_CODEDIM1)
+      .input('GA_GRILLEDIM1', sql.NVarChar, GA_GRILLEDIM1)
+      .input('GA_CODEDIM2', sql.NVarChar, GA_CODEDIM2)
+      .input('GA_GRILLEDIM2', sql.NVarChar, GA_GRILLEDIM2)
+      .query(`
+        INSERT INTO ARTICLE (
+          GA_ARTICLE, GA_CODEARTICLE, GA_CODEBARRE, GA_LIBELLE,
+          GA_PVHT, GA_PVTTC, GA_TENUESTOCK, GA_DATECREATION,
+          GA_FAMILLENIV1, GA_CODEDIM1, GA_GRILLEDIM1,
+          GA_CODEDIM2, GA_GRILLEDIM2
+        )
+        VALUES (
+          @GA_ARTICLE, @GA_CODEARTICLE, @GA_CODEBARRE, @GA_LIBELLE,
+          @GA_PVHT, @GA_PVTTC, @GA_TENUESTOCK, GETDATE(),
+          @GA_FAMILLENIV1, @GA_CODEDIM1, @GA_GRILLEDIM1,
+          @GA_CODEDIM2, @GA_GRILLEDIM2
+        )
+      `);
+
+    const imageURL = imageFile
+      ? `http://localhost:3000/uploads/${imageFile.filename}`
+      : null;
+
+    res.status(201).json({
+      message: 'Article créé avec succès.',
+      image: imageURL,
+    });
+  } catch (err) {
+    console.error('❌ Erreur createArticle :', err);
+    res.status(500).json({
+      message: 'Erreur serveur.',
+      error: err.message,
+    });
+  }
+};
+
+
   
 
 // ✅ 4. Mise à jour d’un article
 exports.updateArticle = async (req, res) => {
   const { id } = req.params;
-  const { GA_LIBELLE, GA_PVHT, GA_PVTTC, GA_TENUESTOCK } = req.body;
+  const {
+    GA_LIBELLE,
+    GA_PVHT,
+    GA_PVTTC,
+    GA_TENUESTOCK,
+    GA_CODEBARRE,
+    GA_FAMILLENIV1,
+    GA_CODEDIM1,
+    GA_GRILLEDIM1,
+    GA_CODEDIM2,
+    GA_GRILLEDIM2
+  } = req.body;
 
-    // 📥 Log image reçue
-  console.log("📥 Fichier image reçu :", req.file?.filename);
-
-  // 📦 Log données texte
-  console.log("📦 Corps reçu :", req.body);
   const imageFile = req.file;
+
+  if (!id || !GA_LIBELLE) {
+    return res.status(400).json({ message: 'ID et libellé requis.' });
+  }
 
   try {
     const pool = await poolPromise;
-    const request = pool.request();
 
-    request.input('GA_ARTICLE', sql.NVarChar, id);
-    request.input('GA_LIBELLE', sql.NVarChar, GA_LIBELLE);
-    request.input('GA_PVHT', sql.Numeric(19, 4), GA_PVHT);
-    request.input('GA_PVTTC', sql.Numeric(19, 4), GA_PVTTC);
-    request.input('GA_TENUESTOCK', sql.NVarChar, GA_TENUESTOCK);
+    // Vérifier que l’article existe
+    const exists = await pool.request()
+      .input('id', sql.NVarChar, id)
+      .query('SELECT 1 FROM ARTICLE WHERE GA_ARTICLE = @id');
 
-    // ✅ Update image file logic (optionnel)
-    if (imageFile) {
-      console.log('🖼️ Nouvelle image uploadée :', imageFile.filename);
-      // Tu peux ici stocker le nom dans une colonne ou juste garder dans /uploads/
+    if (exists.recordset.length === 0) {
+      return res.status(404).json({ message: 'Article non trouvé.' });
     }
 
-    const result = await request.query(`
+    // Mettre à jour
+    const request = pool.request()
+      .input('GA_ARTICLE', sql.NVarChar, id)
+      .input('GA_LIBELLE', sql.NVarChar, GA_LIBELLE.trim())
+      .input('GA_PVHT', sql.Numeric(19, 4), parseFloat(GA_PVHT) || 0)
+      .input('GA_PVTTC', sql.Numeric(19, 4), parseFloat(GA_PVTTC) || 0)
+      .input('GA_TENUESTOCK', sql.NVarChar, GA_TENUESTOCK?.trim() || 'O')
+      .input('GA_CODEBARRE', sql.NVarChar, GA_CODEBARRE?.trim() || '')
+      .input('GA_FAMILLENIV1', sql.NVarChar, GA_FAMILLENIV1?.trim() || '')
+      .input('GA_CODEDIM1', sql.NVarChar, GA_CODEDIM1?.trim() || '')
+      .input('GA_GRILLEDIM1', sql.NVarChar, GA_GRILLEDIM1?.trim() || '')
+      .input('GA_CODEDIM2', sql.NVarChar, GA_CODEDIM2?.trim() || '')
+      .input('GA_GRILLEDIM2', sql.NVarChar, GA_GRILLEDIM2?.trim() || '');
+
+    // Exécution de la requête SQL
+    await request.query(`
       UPDATE ARTICLE
-      SET GA_LIBELLE = @GA_LIBELLE,
-          GA_PVHT = @GA_PVHT,
-          GA_PVTTC = @GA_PVTTC,
-          GA_TENUESTOCK = @GA_TENUESTOCK
+      SET 
+        GA_LIBELLE = @GA_LIBELLE,
+        GA_PVHT = @GA_PVHT,
+        GA_PVTTC = @GA_PVTTC,
+        GA_TENUESTOCK = @GA_TENUESTOCK,
+        GA_CODEBARRE = @GA_CODEBARRE,
+        GA_FAMILLENIV1 = @GA_FAMILLENIV1,
+        GA_CODEDIM1 = @GA_CODEDIM1,
+        GA_GRILLEDIM1 = @GA_GRILLEDIM1,
+        GA_CODEDIM2 = @GA_CODEDIM2,
+        GA_GRILLEDIM2 = @GA_GRILLEDIM2
       WHERE GA_ARTICLE = @GA_ARTICLE
     `);
 
-    if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ message: "Article non trouvé." });
-    }
+    const imageURL = imageFile
+      ? `http://localhost:3000/uploads/${imageFile.filename}`
+      : null;
 
-    res.status(200).json({ message: 'Article mis à jour avec succès.' });
+    res.status(200).json({
+      message: 'Article mis à jour avec succès.',
+      image: imageURL,
+    });
 
   } catch (err) {
     console.error('❌ Erreur updateArticle:', err);
-    res.status(500).json({ message: 'Erreur lors de la mise à jour.', error: err.message });
+    res.status(500).json({
+      message: 'Erreur lors de la mise à jour.',
+      error: err.message,
+    });
   }
 };
 
 
-// ✅ 5. Supprimer un article
-exports.deleteArticle = async (req, res) => {
-  const { id } = req.params;
 
-  try {
-    const pool = await poolPromise;
-    const result = await pool.request()
-      .input('GA_ARTICLE', sql.NVarChar, id)
-      .query('DELETE FROM ARTICLE WHERE GA_ARTICLE = @GA_ARTICLE');
 
-    if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ message: 'Article non trouvé ou déjà supprimé.' });
-    }
-
-    res.status(200).json({ message: 'Article supprimé avec succès.' });
-
-  } catch (err) {
-    res.status(500).json({ message: 'Erreur lors de la suppression.', error: err.message });
-  }
-};
 exports.getAllFamilles = async (req, res) => {
   try {
     const pool = await poolPromise;
@@ -302,8 +344,6 @@ exports.getAllFamilles = async (req, res) => {
     res.status(500).json({ message: 'Erreur récupération des familles.', error: err.message });
   }
 };
-
-
 
 exports.getCategoriesByFamille = async (req, res) => {
   const { famille } = req.params;
@@ -321,6 +361,7 @@ exports.getCategoriesByFamille = async (req, res) => {
     res.status(500).json({ message: 'Erreur récupération des catégories.', error: err.message });
   }
 };
+
 exports.getArticlesByCategorie = async (req, res) => {
   const { categorie } = req.params;
 
@@ -391,6 +432,7 @@ exports.getArticlesByCategorie = async (req, res) => {
     });
   }
 };
+
 
 exports.getDimensionsByArticle = async (req, res) => {
   const { codeArticle } = req.params;
@@ -467,6 +509,7 @@ exports.getDimensionsByArticle = async (req, res) => {
     });
   }
 };
+
 exports.getQuantiteParDimensions = async (req, res) => {
   const { codeArticle, dim1, dim2 } = req.params;
 
@@ -513,6 +556,7 @@ exports.getQuantiteParDimensions = async (req, res) => {
     });
   }
 };
+
 exports.getArticleDetails = async (req, res) => {
   const { codeArticle } = req.params;
   const { dim1, dim2 } = req.query;
@@ -567,6 +611,7 @@ exports.getArticleDetails = async (req, res) => {
 };
 
 
+
 exports.getDepotsByArticleDimensions = async (req, res) => {
   const { codeArticle } = req.params;
   const { dim1, dim2 } = req.query;
@@ -616,6 +661,7 @@ exports.getDepotsByArticleDimensions = async (req, res) => {
     res.status(500).json({ message: "Erreur serveur", error: err.message });
   }
 };
+
 
 exports.getArticlesComplet = async (req, res) => {
   const { limit = 100, offset = 0 } = req.query;
@@ -670,5 +716,38 @@ exports.getArticlesComplet = async (req, res) => {
     });
   }
 };
+
+exports.deleteArticle = async (req, res) => {
+  const { id } = req.params;
+
+  if (!id?.trim()) {
+    return res.status(400).json({ message: 'Identifiant article manquant.' });
+  }
+
+  try {
+    const pool = await poolPromise;
+
+    const result = await pool.request()
+      .input('GA_ARTICLE', sql.NVarChar, id.trim())
+      .query(`
+        DELETE FROM ARTICLE
+        WHERE GA_ARTICLE = @GA_ARTICLE
+      `);
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ message: 'Article non trouvé ou déjà supprimé.' });
+    }
+
+    res.status(200).json({ message: 'Article supprimé avec succès.' });
+
+  } catch (err) {
+    console.error('❌ Erreur deleteArticle:', err);
+    res.status(500).json({
+      message: 'Erreur lors de la suppression de l\'article.',
+      error: err.message
+    });
+  }
+};
+
 
 

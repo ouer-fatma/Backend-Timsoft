@@ -1,17 +1,35 @@
-//User.js
+const sql = require('mssql');
+require('dotenv').config();
+
 class User {
-  constructor(nom, prenom, email, motDePasse, role = 'client') {
+  constructor(nom, prenom, email, motDePasse) {
     this.nom = nom;
     this.prenom = prenom;
     this.email = email;
     this.motDePasse = motDePasse;
-    this.role = role;
-    this.codeTiers = null; // ✅ Ajout du champ CodeTiers
+    this.codeTiers = null; // à générer si nécessaire
   }
 
-  // Méthode pour insérer un utilisateur dans la base de données
+  async generateCodeTiersIfNeeded(pool) {
+    if (this.codeTiers) return;
+
+    const result = await pool.request().query(`
+      SELECT TOP 1 T_TIERS FROM TIERS 
+      WHERE T_TIERS LIKE 'TR%' 
+      ORDER BY TRY_CAST(SUBSTRING(T_TIERS, 3, LEN(T_TIERS)) AS INT) DESC
+    `);
+
+    let newCode = 'TR001';
+    if (result.recordset.length > 0) {
+      const lastCode = result.recordset[0].T_TIERS;
+      const numeric = parseInt(lastCode.slice(2)) + 1;
+      newCode = 'TR' + numeric.toString().padStart(3, '0');
+    }
+
+    this.codeTiers = newCode;
+  }
+
   async save() {
-    const sql = require('mssql');
     const { DB_USER, DB_PASSWORD, DB_SERVER, DB_DATABASE, DB_PORT } = process.env;
 
     const config = {
@@ -26,28 +44,34 @@ class User {
       },
     };
 
+    let pool;
+
     try {
-      await sql.connect(config);
-      const request = new sql.Request();
-      const query = `
-        INSERT INTO Utilisateur (Nom, Prenom, Email, MotDePasse, Role, CodeTiers)
-        VALUES (@Nom, @Prenom, @Email, @MotDePasse, @Role, @CodeTiers)
-      `;
+      pool = await sql.connect(config);
 
-      request.input('Nom', sql.NVarChar, this.nom);
-      request.input('Prenom', sql.NVarChar, this.prenom);
-      request.input('Email', sql.NVarChar, this.email);
-      request.input('MotDePasse', sql.NVarChar, this.motDePasse);
-      request.input('Role', sql.NVarChar, this.role);
-      request.input('CodeTiers', sql.NVarChar, this.codeTiers); // ✅ insertion
+      // Générer un code T_TIERS si non défini
+      await this.generateCodeTiersIfNeeded(pool);
 
-      await request.query(query);
-      console.log('Utilisateur enregistré avec succès !');
+      const request = pool.request();
+
+      request.input('T_TIERS', sql.NVarChar, this.codeTiers);
+      request.input('T_LIBELLE', sql.NVarChar, this.nom); // Nouveau champ
+      request.input('T_PRENOM', sql.NVarChar, this.prenom);
+      request.input('T_EMAIL', sql.NVarChar, this.email);
+      request.input('T_PASSWINTERNET', sql.NVarChar, this.motDePasse);
+
+      await request.query(`
+        INSERT INTO TIERS (T_TIERS, T_LIBELLE, T_PRENOM, T_EMAIL, T_PASSWINTERNET)
+        VALUES (@T_TIERS, @T_LIBELLE, @T_PRENOM, @T_EMAIL, @T_PASSWINTERNET)
+      `);
+
+      console.log('✅ Client enregistré avec succès dans TIERS !');
+
     } catch (err) {
-      console.error('Erreur lors de l\'enregistrement de l\'utilisateur :', err);
+      console.error('❌ Erreur enregistrement TIERS :', err);
       throw err;
     } finally {
-      sql.close();
+      if (pool) await sql.close();
     }
   }
 }

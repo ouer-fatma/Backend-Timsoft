@@ -45,8 +45,12 @@ exports.getOrdersByCodeTiers = async (req, res) => {
     const pool = await poolPromise;
     const result = await pool.request()
       .input('codeTiers', sql.NVarChar, codeTiers)
-      .query('SELECT * FROM PIECE WHERE GP_TIERS = @codeTiers ORDER BY GP_DATECREATION DESC');
-
+       .query(`
+  SELECT * FROM PIECE 
+  WHERE GP_TIERS = @codeTiers 
+    AND GP_NATUREPIECEG = 'CC' 
+  ORDER BY GP_DATECREATION DESC
+`);
     res.status(200).json(result.recordset);
   } catch (err) {
     res.status(500).json({ message: 'Erreur récupération commandes client.', error: err.message });
@@ -454,17 +458,50 @@ exports.deleteOrder = async (req, res) => {
     res.status(500).json({ message: 'Erreur suppression commande.', error: err.message });
   }
 };
+
+exports.annulerCommande = async (req, res) => {
+  const { nature, souche, numero, indice } = req.params;
+
+  try {
+    const pool = await poolPromise;
+    await pool.request()
+      .input('GP_NATUREPIECEG', sql.NVarChar(3), nature)
+      .input('GP_SOUCHE', sql.NVarChar(6), souche)
+      .input('GP_NUMERO', sql.Int, parseInt(numero))
+      .input('GP_INDICEG', sql.NVarChar(3), indice)
+      .query(`
+        UPDATE PIECE
+        SET GP_STATUTPIECE = 'ANN'
+        WHERE GP_NATUREPIECEG = @GP_NATUREPIECEG
+          AND GP_SOUCHE = @GP_SOUCHE
+          AND GP_NUMERO = @GP_NUMERO
+          AND GP_INDICEG = @GP_INDICEG
+      `);
+
+    res.status(200).json({ message: 'Commande annulée avec succès.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur annulation commande.', error: err.message });
+  }
+};
+
+
+
 exports.getOrdersEnAttente = async (req, res) => {
   try {
     const pool = await poolPromise;
     const result = await pool.request()
-      .query(`SELECT * FROM PIECE WHERE GP_STATUTPIECE = 'ATT' ORDER BY GP_DATECREATION DESC`);
+      .query(`
+        SELECT TOP 10 * FROM PIECE 
+        WHERE GP_STATUTPIECE = 'ENR' AND GP_NATUREPIECEG = 'CC'
+        ORDER BY GP_DATECREATION DESC
+      `);
 
     res.status(200).json(result.recordset);
   } catch (err) {
     res.status(500).json({ message: 'Erreur récupération commandes en attente.', error: err.message });
   }
 };
+
 
 exports.getOrdersRecues = async (req, res) => {
   try {
@@ -486,22 +523,48 @@ exports.marquerCommandeCommePrete = async (req, res) => {
 
   try {
     const pool = await poolPromise;
-    const result = await pool.request()
+    await pool.request()
       .input('GP_NATUREPIECEG', sql.NVarChar(3), nature)
       .input('GP_SOUCHE', sql.NVarChar(6), souche)
       .input('GP_NUMERO', sql.Int, numero)
       .input('GP_INDICEG', sql.Int, indice)
       .query(`
         UPDATE PIECE
-        SET GP_STATUTPIECE = 'ENR'
-        WHERE GP_NATUREPIECEG=@GP_NATUREPIECEG AND GP_SOUCHE=@GP_SOUCHE AND GP_NUMERO=@GP_NUMERO AND GP_INDICEG=@GP_INDICEG
+        SET GP_STATUTPIECE = 'PRE'
+        WHERE GP_NATUREPIECEG = @GP_NATUREPIECEG AND GP_SOUCHE = @GP_SOUCHE
+          AND GP_NUMERO = @GP_NUMERO AND GP_INDICEG = @GP_INDICEG
       `);
 
-    res.status(200).json({ message: 'Commande marquée comme prête.' });
+    res.status(200).json({ message: 'Commande marquée comme prête à l\'expédition.' });
   } catch (err) {
     res.status(500).json({ message: 'Erreur mise à jour commande.', error: err.message });
   }
 };
+
+
+exports.marquerCommandeCommeExpediee = async (req, res) => {
+  const { nature, souche, numero, indice } = req.params;
+
+  try {
+    const pool = await poolPromise;
+    await pool.request()
+      .input('GP_NATUREPIECEG', sql.NVarChar(3), nature)
+      .input('GP_SOUCHE', sql.NVarChar(6), souche)
+      .input('GP_NUMERO', sql.Int, numero)
+      .input('GP_INDICEG', sql.Int, indice)
+      .query(`
+        UPDATE PIECE
+        SET GP_STATUTPIECE = 'EXP', GP_DATEEXPEDITION = GETDATE()
+        WHERE GP_NATUREPIECEG = @GP_NATUREPIECEG AND GP_SOUCHE = @GP_SOUCHE
+          AND GP_NUMERO = @GP_NUMERO AND GP_INDICEG = @GP_INDICEG
+      `);
+
+    res.status(200).json({ message: 'Commande expédiée.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur expédition.', error: err.message });
+  }
+};
+
 
 exports.marquerCommandeCommeRecue = async (req, res) => {
   const { nature, souche, numero, indice } = req.params;
@@ -514,7 +577,7 @@ exports.marquerCommandeCommeRecue = async (req, res) => {
       .input('GP_INDICEG', sql.Int, parseInt(indice))
       .query(`
         UPDATE PIECE
-        SET GP_DATERECEPTION = GETDATE()
+        SET GP_STATUTPIECE = 'REC' , GP_DATERECEPTION = GETDATE()
         WHERE GP_NATUREPIECEG = @GP_NATUREPIECEG
           AND GP_SOUCHE = @GP_SOUCHE
           AND GP_NUMERO = @GP_NUMERO
@@ -524,5 +587,30 @@ exports.marquerCommandeCommeRecue = async (req, res) => {
     res.status(200).json({ message: 'Commande marquée comme reçue.' });
   } catch (err) {
     res.status(500).json({ message: 'Erreur lors de la réception de la commande.', error: err.message });
+  }
+};
+
+exports.marquerCommandeCommeLivree = async (req, res) => {
+  const { nature, souche, numero, indice } = req.params;
+
+  try {
+    const pool = await poolPromise;
+    await pool.request()
+      .input('GP_NATUREPIECEG', sql.NVarChar(3), nature)
+      .input('GP_SOUCHE', sql.NVarChar(6), souche)
+      .input('GP_NUMERO', sql.Int, parseInt(numero))
+      .input('GP_INDICEG', sql.Int, parseInt(indice))
+      .query(`
+        UPDATE PIECE
+        SET GP_STATUTPIECE = 'LIV'
+        WHERE GP_NATUREPIECEG = @GP_NATUREPIECEG
+          AND GP_SOUCHE = @GP_SOUCHE
+          AND GP_NUMERO = @GP_NUMERO
+          AND GP_INDICEG = @GP_INDICEG
+      `);
+
+    res.status(200).json({ message: 'Commande marquée comme livrée.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur lors de la livraison.', error: err.message });
   }
 };

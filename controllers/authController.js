@@ -14,107 +14,83 @@ if (!admin.apps.length) {
 }
 
 
-
-
 // Contrôleur pour l'inscription
 const registerUser = async (req, res) => {
   const { nom, prenom, email, motDePasse, role } = req.body;
 
- if (!nom || !prenom || !email || !motDePasse || !role){
+  if (!nom || !prenom || !email || !motDePasse || !role) {
     return res.status(400).json({ message: 'Tous les champs sont obligatoires.' });
   }
 
+  if (role !== 'client') {
+    return res.status(403).json({ message: 'Seuls les clients peuvent s’inscrire via cette route.' });
+  }
+
   try {
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(motDePasse, salt);
+    const motDePasseString = String(motDePasse).trim();
+    const pool = await poolPromise;
 
-    const { DB_USER, DB_PASSWORD, DB_SERVER, DB_DATABASE, DB_PORT } = process.env;
-    const config = {
-      user: DB_USER,
-      password: DB_PASSWORD,
-      server: DB_SERVER,
-      database: DB_DATABASE,
-      port: parseInt(DB_PORT),
-      options: { encrypt: true, trustServerCertificate: true }
-    };
+    // Vérifie si email existe déjà
+    const check = await pool.request()
+      .input('email', sql.NVarChar, email)
+      .query('SELECT 1 FROM TIERS WHERE T_EMAIL = @email');
 
-    await sql.connect(config);
-
-    // ❗ Vérifier si l'email existe déjà
-    const checkEmailRequest = new sql.Request();
-    checkEmailRequest.input('Email', sql.VarChar, email);
-    const existingUser = await checkEmailRequest.query('SELECT 1 FROM Utilisateur WHERE Email = @Email');
-
-    if (existingUser.recordset.length > 0) {
+    if (check.recordset.length > 0) {
       return res.status(409).json({ message: 'Cet e-mail est déjà utilisé.' });
     }
 
-    // ✅ Générer un nouveau CodeTiers
-    const requestGetCode = new sql.Request();
-    const resultLastCode = await requestGetCode.query(`
-      SELECT TOP 1 T_TIERS 
-      FROM TIERS 
+    // Générer T_TIERS
+    const tiersResult = await pool.request().query(`
+      SELECT TOP 1 T_TIERS FROM TIERS 
       WHERE T_TIERS LIKE 'TR%' 
       ORDER BY TRY_CAST(SUBSTRING(T_TIERS, 3, LEN(T_TIERS)) AS INT) DESC
     `);
 
-    let newCodeTiers = 'TR001';
-    if (resultLastCode.recordset.length > 0) {
-      const lastCode = resultLastCode.recordset[0].T_TIERS;
-      const numericPart = parseInt(lastCode.slice(2)) + 1;
-      newCodeTiers = 'TR' + numericPart.toString().padStart(3, '0');
+    let newCode = 'TR001';
+    if (tiersResult.recordset.length > 0) {
+      const lastCode = tiersResult.recordset[0].T_TIERS;
+      const numeric = parseInt(lastCode.slice(2)) + 1;
+      newCode = 'TR' + numeric.toString().padStart(3, '0');
     }
 
-    // ✅ Insérer dans la table TIERS
-    const insertTiersRequest = new sql.Request();
-    insertTiersRequest.input('T_TIERS', sql.VarChar, newCodeTiers);
-    await insertTiersRequest.query(`INSERT INTO TIERS (T_TIERS) VALUES (@T_TIERS)`);
+    const hashedPassword = motDePasseString; // Pas besoin de hash vu ta limite 20 char
 
-    // ✅ Créer et enregistrer l'utilisateur avec CodeTiers
-    const user = new User(nom, prenom, email, hashedPassword, 'client'); // tu peux ajuster le rôle si besoin
-    user.codeTiers = newCodeTiers;
+    // 🛠️ Assigner T_AUXILIAIRE avec le même code que T_TIERS
+    await pool.request()
+      .input('T_TIERS', sql.NVarChar, newCode)
+      .input('T_AUXILIAIRE', sql.NVarChar, newCode)
+      .input('T_LIBELLE', sql.NVarChar, `${nom} ${prenom}`)
+      .input('T_EMAIL', sql.NVarChar, email)
+      .input('T_PASSWINTERNET', sql.NVarChar, hashedPassword)
+      .query(`
+        INSERT INTO TIERS (T_TIERS, T_AUXILIAIRE, T_LIBELLE, T_EMAIL, T_PASSWINTERNET)
+        VALUES (@T_TIERS, @T_AUXILIAIRE, @T_LIBELLE, @T_EMAIL, @T_PASSWINTERNET)
+      `);
 
-    await user.save();
+    // 🛒 Créer un panier
+    const resultNumero = await pool.request().query(`
+      SELECT MAX(CAST(GP_NUMERO AS INT)) + 1 AS newNumero 
+      FROM PIECE WHERE ISNUMERIC(GP_NUMERO) = 1
+    `);
 
- // 🛒 Initialiser un panier vide pour l'utilisateur nouvellement inscrit
-// 🛒 Initialiser un panier vide pour le nouvel utilisateur
-const pool = await poolPromise;
-// Utilise un seul request pour éviter overlap
-const request = pool.request();
+    const newNumero = resultNumero.recordset[0].newNumero || 1;
 
-const resultNumero = await request.query(`
-  SELECT MAX(CAST(GP_NUMERO AS INT)) + 1 AS newNumero 
-  FROM PIECE 
-  WHERE ISNUMERIC(GP_NUMERO) = 1
-`);
+    await pool.request()
+      .input('nature', sql.NVarChar, 'PAN')
+      .input('souche', sql.NVarChar, 'PAN001')
+      .input('numero', sql.Int, newNumero)
+      .input('indice', sql.Int, 0)
+      .input('tiers', sql.NVarChar, newCode)
+      .query(`
+        INSERT INTO PIECE (GP_NATUREPIECEG, GP_SOUCHE, GP_NUMERO, GP_INDICEG, GP_TIERS, GP_DATEPIECE)
+        VALUES (@nature, @souche, @numero, @indice, @tiers, GETDATE())
+      `);
 
-const newNumero = resultNumero.recordset[0].newNumero || 1;
-
-// 👇 insère en une seule transaction
-await request
-  .input('nature', sql.NVarChar, 'PAN')
-  .input('souche', sql.NVarChar, 'PAN001')
-  .input('numero', sql.Int, newNumero)
-  .input('indice', sql.Int, 0)
-  .input('tiers', sql.NVarChar, newCodeTiers)
-  .query(`
-    INSERT INTO PIECE (GP_NATUREPIECEG, GP_SOUCHE, GP_NUMERO, GP_INDICEG, GP_TIERS, GP_DATEPIECE)
-    VALUES (@nature, @souche, @numero, @indice, @tiers, GETDATE())
-  `);
-
-
-
-
-    
-
-    res.status(201).json({ message: 'Utilisateur enregistré avec succès !' });
+    return res.status(201).json({ message: 'Client enregistré avec succès !' });
 
   } catch (err) {
-    console.error('Erreur lors de l\'inscription :', err);
-    res.status(500).json({ message: 'Erreur lors de l\'inscription.' });
-  } finally {
-    await sql.close();
-    sql.close();
+    console.error('❌ Erreur registerUser:', err);
+    return res.status(500).json({ message: 'Erreur serveur lors de l\'inscription.' });
   }
 };
 
@@ -129,162 +105,188 @@ const loginUser = async (req, res) => {
   }
 
   try {
-    const { DB_USER, DB_PASSWORD, DB_SERVER, DB_DATABASE, DB_PORT } = process.env;
-    const config = {
-      user: DB_USER,
-      password: DB_PASSWORD,
-      server: DB_SERVER,
-      database: DB_DATABASE,
-      port: parseInt(DB_PORT),
-      options: { encrypt: true, trustServerCertificate: true }
-    };
+    const pool = await poolPromise;
+    let utilisateur = null;
+    let role = null;
+    let codeTiers = null;
+    let nom = null; // ✅ à ajouter dans le token pour les clients
+    let prenom = null;
 
-    await sql.connect(config);
-    const request = new sql.Request();
-    request.input('Email', sql.VarChar, email);
-    
-    const result = await request.query('SELECT * FROM Utilisateur WHERE Email = @Email');
-    const utilisateur = result.recordset[0];
+    // 🔍 Vérifie si c’est un utilisateur interne (admin / magasinier)
+    const userResult = await pool.request()
+      .input('email', sql.NVarChar, email)
+      .query(`
+        SELECT US_UTILISATEUR, US_EMAIL, US_PASSWORD, US_FONCTION, US_SUPERVISEUR, US_GROUPE
+        FROM UTILISAT
+        WHERE US_EMAIL = @email
+      `);
+
+    if (userResult.recordset.length > 0) {
+      const user = userResult.recordset[0];
+
+      if (motDePasse.trim() !== user.US_PASSWORD?.trim()) {
+        return res.status(401).json({ message: 'Mot de passe incorrect.' });
+      }
+
+      utilisateur = user;
+      codeTiers = user.US_UTILISATEUR?.trim();
+
+      role = (user.US_GROUPE === 'ADM' ||
+              (user.US_SUPERVISEUR === 'X' && user.US_GROUPE === 'ADM') ||
+              (user.US_FONCTION && user.US_FONCTION.toLowerCase().includes('admin')))
+              ? 'admin'
+              : 'personnel_magasin';
+    }
+
+    // 🔍 Sinon, vérifier si c’est un client dans TIERS
+    if (!utilisateur) {
+      const clientResult = await pool.request()
+        .input('email', sql.NVarChar, email)
+        .query(`
+          SELECT T_TIERS, T_EMAIL, T_PASSWINTERNET, T_LIBELLE, T_PRENOM 
+          FROM TIERS 
+          WHERE T_EMAIL = @email
+        `);
+
+      if (clientResult.recordset.length > 0) {
+        const client = clientResult.recordset[0];
+
+        if (motDePasse !== client.T_PASSWINTERNET?.trim()) {
+          return res.status(401).json({ message: 'Mot de passe incorrect.' });
+        }
+
+        utilisateur = client;
+        codeTiers = client.T_TIERS;
+        nom = client.T_LIBELLE;
+        prenom = client.T_PRENOM;
+        role = 'client';
+      }
+    }
 
     if (!utilisateur) {
       return res.status(404).json({ message: 'Utilisateur non trouvé.' });
     }
 
-    const passwordMatch = await bcrypt.compare(motDePasse, utilisateur.MotDePasse);
-    if (!passwordMatch) {
-      return res.status(401).json({ message: 'Mot de passe incorrect.' });
+    const tokenPayload = {
+      email,
+      role,
+      codeTiers,
+    };
+
+    // ✅ Ajouter nom/prenom au token pour les clients
+    if (role === 'client') {
+      tokenPayload.nom = nom;
+      tokenPayload.prenom = prenom;
     }
 
-    const token = jwt.sign(
-      {
-        id: utilisateur.ID_Utilisateur,
-        nom: utilisateur.Nom,
-        email: utilisateur.Email,
-        role: utilisateur.Role,
-        codeTiers: utilisateur.CodeTiers // 👈 ajoute ça
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
-    
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1h' });
 
-    console.log("Email reçu:", email);
-    console.log("Utilisateur trouvé:", utilisateur);
-    console.log("Mot de passe correct:", passwordMatch);
+    const response = {
+      message: 'Connexion réussie !',
+      token,
+      role,
+      codeTiers,
+      email,
+    };
 
-    res.status(200).json({ message: 'Connexion réussie !', token });
+    // ✅ Ajout des données COMMERCIAL pour les magasinier
+    if (role === 'personnel_magasin') {
+      const commercialRes = await pool.request()
+        .input('code', sql.NVarChar, codeTiers)
+        .query(`SELECT * FROM COMMERCIAL WHERE GCL_COMMERCIAL = @code`);
+
+      response.commercial = commercialRes.recordset[0] || null;
+    }
+
+    res.status(200).json(response);
 
   } catch (err) {
-    console.error('Erreur lors de la connexion :', err);
-    res.status(500).json({ message: 'Erreur lors de la connexion.' });
-  } finally {
-    await sql.close();
+    console.error('❌ Erreur de connexion :', err);
+    res.status(500).json({ message: 'Erreur serveur pendant la connexion.' });
   }
 };
 
 
+
 const googleSignIn = async (req, res) => {
-  const token = req.body.token;
-  const username = req.body.username;
+  const { token, username } = req.body;
 
   try {
-const decodedToken = await admin.auth().verifyIdToken(token);
-console.log("✅ Firebase Token décodé:", decodedToken);
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    const email = decodedToken.email;
+    const nom = username || decodedToken.name || email.split('@')[0];
+    const prenom = ''; // Pas fourni par Google
 
-const email = decodedToken.email;
-const nom = username || decodedToken.name || email.split('@')[0];
-const prenom = ''; // Google ne fournit pas toujours le prénom
+    const pool = await poolPromise;
 
+    // Vérifie si le client existe déjà
+    const result = await pool.request()
+      .input('email', sql.NVarChar, email)
+      .query(`SELECT * FROM TIERS WHERE T_EMAIL = @email`);
 
+    let user = result.recordset[0];
 
-    const config = {
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      server: process.env.DB_SERVER,
-      database: process.env.DB_DATABASE,
-      port: parseInt(process.env.DB_PORT),
-      options: { encrypt: true, trustServerCertificate: true }
-    };
-
-    await sql.connect(config);
-
-    let utilisateur;
-    const checkRequest = new sql.Request();
-    checkRequest.input('Email', sql.NVarChar, email);
-    const result = await checkRequest.query('SELECT * FROM Utilisateur WHERE Email = @Email');
-
-    if (result.recordset.length === 0) {
-      // 🔁 Génération du CodeTiers
-      const codeRequest = new sql.Request();
-      const codeResult = await codeRequest.query(`
-        SELECT TOP 1 T_TIERS 
-        FROM TIERS 
+    // S'il n'existe pas, on le crée
+    if (!user) {
+      const tiersCodeResult = await pool.request().query(`
+        SELECT TOP 1 T_TIERS FROM TIERS 
         WHERE T_TIERS LIKE 'TR%' 
         ORDER BY TRY_CAST(SUBSTRING(T_TIERS, 3, LEN(T_TIERS)) AS INT) DESC
       `);
 
-      let newCodeTiers = 'TR001';
-      if (codeResult.recordset.length > 0) {
-        const lastCode = codeResult.recordset[0].T_TIERS;
-        const numericPart = parseInt(lastCode.slice(2)) + 1;
-        newCodeTiers = 'TR' + numericPart.toString().padStart(3, '0');
+      let newCode = 'TR001';
+      if (tiersCodeResult.recordset.length > 0) {
+        const lastCode = tiersCodeResult.recordset[0].T_TIERS;
+        const numeric = parseInt(lastCode.slice(2)) + 1;
+        newCode = 'TR' + numeric.toString().padStart(3, '0');
       }
 
-      // 🔁 Insertion dans TIERS
-      const insertTiersRequest = new sql.Request();
-      insertTiersRequest.input('T_TIERS', sql.NVarChar, newCodeTiers);
-      await insertTiersRequest.query(`INSERT INTO TIERS (T_TIERS) VALUES (@T_TIERS)`);
+      const hashedPassword = '0000'; // Plain fallback (pas de hash)
 
-      // 🔁 Insertion dans Utilisateur
-      const hashedPassword = bcrypt.hashSync('0000', 10); // Valeur par défaut
-      const insertRequest = new sql.Request();
-      insertRequest
-        .input('Nom', sql.NVarChar, nom)
-        .input('Prenom', sql.NVarChar, prenom)
-        .input('Email', sql.NVarChar, email)
-        .input('MotDePasse', sql.NVarChar, hashedPassword)
-        .input('Role', sql.NVarChar, 'client')
-        .input('CodeTiers', sql.NVarChar, newCodeTiers)
+      await pool.request()
+        .input('T_TIERS', sql.NVarChar, newCode)
+        .input('T_AUXILIAIRE', sql.NVarChar, newCode) // ✅ requis pour éviter l’erreur d’unicité
+        .input('T_LIBELLE', sql.NVarChar, nom)
+        .input('T_EMAIL', sql.NVarChar, email)
+        .input('T_PASSWINTERNET', sql.NVarChar, hashedPassword)
         .query(`
-          INSERT INTO Utilisateur (Nom, Prenom, Email, MotDePasse, Role, CodeTiers)
-          VALUES (@Nom, @Prenom, @Email, @MotDePasse, @Role, @CodeTiers)
+          INSERT INTO TIERS (T_TIERS, T_AUXILIAIRE, T_LIBELLE, T_EMAIL, T_PASSWINTERNET)
+          VALUES (@T_TIERS, @T_AUXILIAIRE, @T_LIBELLE, @T_EMAIL, @T_PASSWINTERNET)
         `);
 
-      // 🔁 Initialiser le panier (PIECE)
-      const panierRequest = new sql.Request();
-      const resultNumero = await panierRequest.query(`
+      // Créer un panier
+      const panierResult = await pool.request().query(`
         SELECT MAX(CAST(GP_NUMERO AS INT)) + 1 AS newNumero 
-        FROM PIECE 
-        WHERE ISNUMERIC(GP_NUMERO) = 1
+        FROM PIECE WHERE ISNUMERIC(GP_NUMERO) = 1
       `);
-      const newNumero = resultNumero.recordset[0].newNumero || 1;
 
-      await panierRequest
+      const newNumero = panierResult.recordset[0].newNumero || 1;
+
+      await pool.request()
         .input('nature', sql.NVarChar, 'PAN')
         .input('souche', sql.NVarChar, 'PAN001')
         .input('numero', sql.Int, newNumero)
         .input('indice', sql.Int, 0)
-        .input('tiers', sql.NVarChar, newCodeTiers)
+        .input('tiers', sql.NVarChar, newCode)
         .query(`
           INSERT INTO PIECE (GP_NATUREPIECEG, GP_SOUCHE, GP_NUMERO, GP_INDICEG, GP_TIERS, GP_DATEPIECE)
           VALUES (@nature, @souche, @numero, @indice, @tiers, GETDATE())
         `);
 
-      const fetch = new sql.Request();
-      fetch.input('Email', sql.NVarChar, email);
-      const newResult = await fetch.query('SELECT * FROM Utilisateur WHERE Email = @Email');
-      utilisateur = newResult.recordset[0];
-    } else {
-      utilisateur = result.recordset[0];
+      user = {
+        T_TIERS: newCode,
+        T_LIBELLE: nom,
+        T_EMAIL: email
+      };
     }
 
+    // Créer le token JWT
     const jwtToken = jwt.sign(
       {
-        id: utilisateur.ID_Utilisateur,
-        email: utilisateur.Email,
-        nom: utilisateur.Nom,
-        role: utilisateur.Role,
-        codeTiers: utilisateur.CodeTiers,
+        codeTiers: user.T_TIERS,
+        nom: user.T_LIBELLE,
+        email: user.T_EMAIL,
+        role: 'client'
       },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
@@ -294,24 +296,19 @@ const prenom = ''; // Google ne fournit pas toujours le prénom
       message: 'Connexion Google réussie !',
       token: jwtToken,
       user: {
-        nom: utilisateur.Nom,
-        email: utilisateur.Email,
-        role: utilisateur.Role,
-        codeTiers: utilisateur.CodeTiers,
+        codeTiers: user.T_TIERS,
+        nom: user.T_LIBELLE,
+        email: user.T_EMAIL,
+        role: 'client'
       }
     });
 
-  } catch (error) {
-    console.error('❌ Erreur Google Sign-In:', error.message);
-console.error('🧵 Stack complète :', error.stack);
-
-    res.status(401).json({ message: 'Échec de la vérification Google.', error: error.message });
-  } finally {
-    await sql.close();
+  } catch (err) {
+    console.error('❌ Erreur Google Sign-In:', err.message);
+    res.status(401).json({ message: 'Erreur d\'authentification Google.', error: err.message });
   }
 };
 
-module.exports.googleSignIn = googleSignIn;
 
 
 
@@ -323,8 +320,9 @@ const clientDashboard = (req, res) => res.json({ message: 'Bienvenue, Client !' 
 module.exports = {
   registerUser,
   loginUser,
+  googleSignIn,
   adminDashboard,
   magasinDashboard,
   clientDashboard
 };
-module.exports.googleSignIn = googleSignIn;
+
