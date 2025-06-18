@@ -13,6 +13,7 @@ const panierRoutes = require('./routes/panierRoutes');
 const { poolPromise } = require('./db');
 
 const clickCollectRoutes = require('./routes/clickCollect');
+
 const stockRoutes = require('./routes/stockRoutes');
 const invoiceRoutes = require('./routes/invoice');
 const stockTransferRoutes = require('./routes/stockTransferRoutes');
