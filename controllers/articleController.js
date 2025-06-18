@@ -1,69 +1,43 @@
 const { sql, poolPromise } = require('../db');
 const fs = require('fs');
 const path = require('path');
+const { appliquerRemise } = require('../utils/remiseUtil');
+const sendNotification = require('../utils/sendNotification');
 
 // ✅ 1. Récupérer les 100 premiers articles avec leur remise générale
 exports.getAllArticles = async (req, res) => {
   try {
     const pool = await poolPromise;
-
     const articlesResult = await pool.request().query(`
-      SELECT TOP 10 *
-      FROM ARTICLE
-      ORDER BY GA_DATECREATION DESC
+      SELECT TOP 20 * FROM ARTICLE ORDER BY GA_DATECREATION DESC
     `);
+
     const articles = articlesResult.recordset;
 
     const uploadsPath = path.join(__dirname, '..', 'uploads');
     const files = fs.existsSync(uploadsPath) ? fs.readdirSync(uploadsPath) : [];
-
     const normalize = str => str?.toLowerCase()?.replace(/\s+/g, '');
 
-    const articlesWithRemises = await Promise.all(
-      articles.map(async (article) => {
-        // Remise
-        const remiseResult = await pool.request()
-          .input('codeArticle', sql.NVarChar, article.GA_CODEARTICLE)
-          .query(`
-            SELECT MLR_REMISE, MLR_DATEPIECE
-            FROM REMISE
-            WHERE MLR_ORGREMISE = @codeArticle
-              AND MLR_CODECOND IS NULL
-              AND MLR_DATEPIECE <= GETDATE()
-          `);
-        const remise = remiseResult.recordset[0];
+    const articlesWithImages = articles.map(article => {
+      const matchedFile = files
+        .filter(file => normalize(file).includes(normalize(article.GA_CODEARTICLE)))
+        .sort((a, b) =>
+          fs.statSync(path.join(uploadsPath, b)).mtime - fs.statSync(path.join(uploadsPath, a)).mtime
+        )[0];
 
-        // Image matching
-    const matchedFile = files
-  .filter(file => normalize(file).includes(normalize(article.GA_CODEARTICLE)))
-  .sort((a, b) => {
-    const aTime = fs.statSync(path.join(uploadsPath, a)).mtime.getTime();
-    const bTime = fs.statSync(path.join(uploadsPath, b)).mtime.getTime();
-    return bTime - aTime; // image la plus récente en premier
-  })[0];
+      const imageUrl = matchedFile
+        ? `http://localhost:3000/uploads/${matchedFile}`
+        : null;
 
-        const imageUrl = matchedFile
-          ? `http://localhost:3000/uploads/${matchedFile}`
-          : null;
+      return { ...article, GA_IMAGE_URL: imageUrl };
+    });
 
-        return {
-          ...article,
-          GA_IMAGE_URL: imageUrl,
-          REMISE: remise ? {
-            MLR_REMISE: remise.MLR_REMISE,
-            DATE_EFFET: remise.MLR_DATEPIECE
-          } : null
-        };
-      })
-    );
-
-    res.status(200).json(articlesWithRemises);
-
+    res.status(200).json(articlesWithImages);
   } catch (err) {
     console.error('Erreur getAllArticles:', err);
     res.status(500).json({
       message: 'Erreur lors de la récupération des articles.',
-      error: err.message
+      error: err.message,
     });
   }
 };
@@ -165,57 +139,147 @@ exports.searchArticles = async (req, res) => {
 
 // ✅ 3. Créer un nouvel article
 
-  exports.createArticle = async (req, res) => {
-    const GA_ARTICLE = req.body.GA_ARTICLE?.trim();
-    const GA_CODEARTICLE = req.body.GA_CODEARTICLE?.trim();
-    const GA_CODEBARRE = req.body.GA_CODEBARRE?.trim() || '';
-    const GA_LIBELLE = req.body.GA_LIBELLE?.trim();
-    const GA_PVHT = parseFloat(req.body.GA_PVHT) || 0;
-    const GA_PVTTC = parseFloat(req.body.GA_PVTTC) || 0;
-    const GA_TENUESTOCK = req.body.GA_TENUESTOCK?.trim() || 'O';
-    const imageFile = req.file;
-    
-    if (!GA_ARTICLE || !GA_CODEARTICLE || !GA_LIBELLE) {
-      return res.status(400).json({ message: 'Champs obligatoires manquants.' });
-    }
-    
-  
-    try {
-      const pool = await poolPromise;
-  
-      await pool.request()
-        .input('GA_ARTICLE', sql.NVarChar, GA_ARTICLE)
-        .input('GA_CODEARTICLE', sql.NVarChar, GA_CODEARTICLE)
-        .input('GA_CODEBARRE', sql.NVarChar, GA_CODEBARRE || '')
-        .input('GA_LIBELLE', sql.NVarChar, GA_LIBELLE)
-        .input('GA_PVHT', sql.Numeric(19, 4), GA_PVHT || 0)
-        .input('GA_PVTTC', sql.Numeric(19, 4), GA_PVTTC || 0)
-        .input('GA_TENUESTOCK', sql.NVarChar, GA_TENUESTOCK || 'O')
-        .query(`
-          INSERT INTO ARTICLE (
-            GA_ARTICLE, GA_CODEARTICLE, GA_CODEBARRE, GA_LIBELLE,
-            GA_PVHT, GA_PVTTC, GA_TENUESTOCK, GA_DATECREATION
-          )
-          VALUES (
-            @GA_ARTICLE, @GA_CODEARTICLE, @GA_CODEBARRE, @GA_LIBELLE,
-            @GA_PVHT, @GA_PVTTC, @GA_TENUESTOCK, GETDATE()
-          )
-        `);
+exports.createArticle = async (req, res) => {
+  const GA_ARTICLE = req.body.GA_ARTICLE?.trim();
+  const GA_CODEARTICLE = req.body.GA_CODEARTICLE?.trim();
+  const GA_CODEBARRE = req.body.GA_CODEBARRE?.trim() || '';
+  const GA_LIBELLE = req.body.GA_LIBELLE?.trim();
+  const GA_PVHT = parseFloat(req.body.GA_PVHT) || 0;
+  const GA_PVTTC = parseFloat(req.body.GA_PVTTC) || 0;
+  const GA_TENUESTOCK = req.body.GA_TENUESTOCK?.trim() || 'O';
+  const GA_FAMILLENIV1 = req.body.GA_FAMILLENIV1?.trim() || '';
+  const GA_FAMILLENIV2 = req.body.GA_FAMILLENIV2?.trim() || '';
 
-        const imageURL = imageFile ? `http://localhost:3000/uploads/${imageFile.filename}` : null;
-  
-      res.status(201).json({ message: 'Article créé avec succès.', 
-        image: imageURL
-       });
-  
-    } catch (err) { 
-      res.status(500).json({
-        message: 'Erreur lors de la création de l\'article.',
-        error: err.message
-      });
+
+  let dimensions = [];
+  let quantities = [];
+  const imageFile = req.file;
+
+  try {
+    if (typeof req.body.dimensions === 'string') {
+      dimensions = JSON.parse(req.body.dimensions);
+    } else if (Array.isArray(req.body.dimensions)) {
+      dimensions = req.body.dimensions;
     }
-  };
-  
+
+    if (typeof req.body.quantities === 'string') {
+      quantities = JSON.parse(req.body.quantities);
+    } else if (Array.isArray(req.body.quantities)) {
+      quantities = req.body.quantities;
+    }
+  } catch (parseError) {
+    return res.status(400).json({
+      message: "Erreur de format JSON dans 'dimensions' ou 'quantities'.",
+      error: parseError.message
+    });
+  }
+
+  if (!GA_ARTICLE || !GA_CODEARTICLE || !GA_LIBELLE) {
+    return res.status(400).json({ message: 'Champs obligatoires manquants.' });
+  }
+
+  try {
+    const pool = await poolPromise;
+
+    // Par défaut
+    let GA_CODEDIM1 = null;
+    let GA_GRILLEDIM1 = null;
+    let GA_CODEDIM2 = null;
+    let GA_GRILLEDIM2 = null;
+
+    // Chercher les codes dimension/grille pour taille (DI1) et couleur (DI2)
+    for (const dim of dimensions) {
+      const { taille, couleur } = dim;
+
+      // Taille
+      if (taille) {
+        const result = await pool.request()
+          .input('libelle', sql.NVarChar, taille)
+          .query(`
+            SELECT TOP 1 GDI_CODEDIM, GDI_GRILLEDIM
+            FROM DIMENSION
+            WHERE GDI_LIBELLE = @libelle AND GDI_TYPEDIM = 'DI1'
+          `);
+        if (result.recordset[0]) {
+          GA_CODEDIM1 = result.recordset[0].GDI_CODEDIM;
+          GA_GRILLEDIM1 = result.recordset[0].GDI_GRILLEDIM;
+        }
+      }
+
+      // Couleur
+      if (couleur) {
+        const result = await pool.request()
+          .input('libelle', sql.NVarChar, couleur)
+          .query(`
+            SELECT TOP 1 GDI_CODEDIM, GDI_GRILLEDIM
+            FROM DIMENSION
+            WHERE GDI_LIBELLE = @libelle AND GDI_TYPEDIM = 'DI2'
+          `);
+        if (result.recordset[0]) {
+          GA_CODEDIM2 = result.recordset[0].GDI_CODEDIM;
+          GA_GRILLEDIM2 = result.recordset[0].GDI_GRILLEDIM;
+        }
+      }
+    }
+
+    // Insertion dans ARTICLE
+    await pool.request()
+      .input('GA_ARTICLE', sql.NVarChar, GA_ARTICLE)
+      .input('GA_CODEARTICLE', sql.NVarChar, GA_CODEARTICLE)
+      .input('GA_CODEBARRE', sql.NVarChar, GA_CODEBARRE)
+      .input('GA_LIBELLE', sql.NVarChar, GA_LIBELLE)
+      .input('GA_PVHT', sql.Numeric(19, 4), GA_PVHT)
+      .input('GA_PVTTC', sql.Numeric(19, 4), GA_PVTTC)
+      .input('GA_TENUESTOCK', sql.NVarChar, GA_TENUESTOCK)
+      .input('GA_CODEDIM1', sql.NVarChar, GA_CODEDIM1)
+      .input('GA_GRILLEDIM1', sql.NVarChar, GA_GRILLEDIM1)
+      .input('GA_CODEDIM2', sql.NVarChar, GA_CODEDIM2)
+      .input('GA_GRILLEDIM2', sql.NVarChar, GA_GRILLEDIM2)
+      .input('GA_FAMILLENIV1', sql.NVarChar, GA_FAMILLENIV1)
+      .input('GA_FAMILLENIV2', sql.NVarChar, GA_FAMILLENIV2)
+      .query(`
+        INSERT INTO ARTICLE (
+          GA_ARTICLE, GA_CODEARTICLE, GA_CODEBARRE, GA_LIBELLE,
+          GA_PVHT, GA_PVTTC, GA_TENUESTOCK, GA_DATECREATION,
+          GA_CODEDIM1, GA_GRILLEDIM1, GA_CODEDIM2, GA_GRILLEDIM2,GA_FAMILLENIV1,GA_FAMILLENIV2
+        )
+        VALUES (
+          @GA_ARTICLE, @GA_CODEARTICLE, @GA_CODEBARRE, @GA_LIBELLE,
+          @GA_PVHT, @GA_PVTTC, @GA_TENUESTOCK, GETDATE(),
+          @GA_CODEDIM1, @GA_GRILLEDIM1, @GA_CODEDIM2, @GA_GRILLEDIM2 ,@GA_FAMILLENIV1,@GA_FAMILLENIV2
+        )
+      `);
+
+    // Insertion dans DISPO
+    for (const entry of quantities) {
+      const { depot, quantite } = entry;
+      await pool.request()
+        .input('article', sql.NVarChar, GA_ARTICLE)
+        .input('depot', sql.NVarChar, depot)
+        .input('qte', sql.Int, quantite)
+        .query(`
+          INSERT INTO DISPO (GQ_ARTICLE, GQ_DEPOT, GQ_PHYSIQUE, GQ_CLOTURE)
+          VALUES (@article, @depot, @qte, 'X')
+        `);
+    }
+
+    // Image
+    const imageURL = imageFile ? `http://localhost:3000/uploads/${imageFile.filename}` : null;
+
+    res.status(201).json({
+      message: 'Article créé avec succès.',
+      image: imageURL
+    });
+
+  } catch (err) {
+    console.error("Erreur createArticle:", err);
+    res.status(500).json({
+      message: 'Erreur lors de la création de l\'article.',
+      error: err.message
+    });
+  }
+};
+
 
 // ✅ 4. Mise à jour d’un article
 exports.updateArticle = async (req, res) => {
@@ -305,6 +369,160 @@ exports.getAllFamilles = async (req, res) => {
 
 
 
+exports.createRemise = async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const body = req.body;
+
+    const inputArticle = body.GA_ARTICLE.replace(/\s+/g, '');
+
+    const articleResult = await pool.request()
+      .input('cleanArticle', sql.NVarChar, inputArticle)
+      .query(`
+        SELECT TOP 1 * FROM ARTICLE
+        WHERE REPLACE(GA_ARTICLE, ' ', '') = @cleanArticle
+      `);
+
+    if (articleResult.recordset.length === 0) {
+      return res.status(404).json({ message: 'Article non trouvé.' });
+    }
+
+    const article = articleResult.recordset[0];
+    const mlr_orgremise = article.GA_ARTICLE;
+
+    await pool.request()
+      .input('MLR_ORGREMISE', sql.NVarChar, mlr_orgremise)
+      .input('MLR_TYPEREMISE', sql.NVarChar, body.MLR_TYPEREMISE)
+      .input('GTR_LIBELLE', sql.NVarChar, body.GTR_LIBELLE)
+      .input('MLR_REMISE', sql.Float, body.MLR_REMISE)
+      .input('MLR_VALEURREMDEV', sql.Float, body.MLR_VALEURREMDEV)
+      .input('MLR_MONTANTHTDEV', sql.Float, body.MLR_MONTANTHTDEV)
+      .input('MLR_MONTANTTTCDEV', sql.Float, body.MLR_MONTANTTTCDEV)
+      .input('MLR_CODECOND', sql.NVarChar, body.MLR_CODECOND)
+      .input('MLR_totalbase', sql.Float, body.MLR_totalbase)
+      .input('MLR_DATEPIECE', sql.DateTime, new Date(body.MLR_DATEPIECE))
+      .query(`
+        INSERT INTO REMISE (
+          MLR_ORGREMISE, MLR_TYPEREMISE, GTR_LIBELLE, MLR_REMISE,
+          MLR_VALEURREMDEV, MLR_MONTANTHTDEV, MLR_MONTANTTTCDEV,
+          MLR_CODECOND, MLR_totalbase, MLR_DATEPIECE
+        ) VALUES (
+          @MLR_ORGREMISE, @MLR_TYPEREMISE, @GTR_LIBELLE, @MLR_REMISE,
+          @MLR_VALEURREMDEV, @MLR_MONTANTHTDEV, @MLR_MONTANTTTCDEV,
+          @MLR_CODECOND, @MLR_totalbase, @MLR_DATEPIECE
+        )
+      `);
+
+      // ✅ Envoi de la notification
+await sendNotification(
+  'Nouvelle remise disponible 🎁',
+  `Une remise de ${body.MLR_REMISE}% a été appliquée à "${article.GA_LIBELLE}".`
+);
+
+    res.status(201).json({ message: 'Remise créée avec succès.' });
+
+  } catch (err) {
+    console.error('Erreur createRemise:', err);
+    res.status(500).json({
+      message: 'Erreur lors de la création de la remise.',
+      error: err.message
+    });
+  }
+};
+
+
+
+
+exports.updateRemise = async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const {
+      GA_ARTICLE,
+      MLR_TYPEREMISE,
+      GTR_LIBELLE,
+      MLR_REMISE,
+      MLR_VALEURREMDEV,
+      MLR_MONTANTHTDEV,
+      MLR_MONTANTTTCDEV,
+      MLR_CODECOND,
+      MLR_totalbase,
+      MLR_DATEPIECE
+    } = req.body;
+
+    // Clean GA_ARTICLE (supprimer les espaces, insécables, etc.)
+    const cleanArticle = GA_ARTICLE.replace(/[\s\u00A0\u202F]+/g, '');
+
+    // Vérifie si une remise existe déjà
+   const existing = await pool.request()
+  .input('cleanCode', sql.NVarChar, cleanArticle)
+  .input('MLR_DATEPIECE', sql.DateTime, new Date(MLR_DATEPIECE)) // ✅ Manquant !
+  .query(`
+    SELECT * FROM REMISE
+    WHERE REPLACE(REPLACE(REPLACE(MLR_ORGREMISE, ' ', ''), CHAR(160), ''), CHAR(8239), '') = @cleanCode
+      AND MLR_CODECOND IS NULL
+      AND MLR_DATEPIECE = @MLR_DATEPIECE
+  `);
+
+
+    const request = pool.request()
+      .input('MLR_ORGREMISE', sql.NVarChar, GA_ARTICLE)
+      .input('MLR_TYPEREMISE', sql.NVarChar, MLR_TYPEREMISE)
+      .input('GTR_LIBELLE', sql.NVarChar, GTR_LIBELLE)
+      .input('MLR_REMISE', sql.Float, MLR_REMISE)
+      .input('MLR_VALEURREMDEV', sql.Float, MLR_VALEURREMDEV)
+      .input('MLR_MONTANTHTDEV', sql.Float, MLR_MONTANTHTDEV)
+      .input('MLR_MONTANTTTCDEV', sql.Float, MLR_MONTANTTTCDEV)
+      .input('MLR_CODECOND', sql.NVarChar, MLR_CODECOND)
+      .input('MLR_totalbase', sql.Float, MLR_totalbase)
+      .input('MLR_DATEPIECE', sql.DateTime, new Date(MLR_DATEPIECE));
+
+    if (existing.recordset.length > 0) {
+      // Remise existe : on met à jour
+      await request.query(`
+        UPDATE REMISE SET
+          MLR_TYPEREMISE = @MLR_TYPEREMISE,
+          GTR_LIBELLE = @GTR_LIBELLE,
+          MLR_REMISE = @MLR_REMISE,
+          MLR_VALEURREMDEV = @MLR_VALEURREMDEV,
+          MLR_MONTANTHTDEV = @MLR_MONTANTHTDEV,
+          MLR_MONTANTTTCDEV = @MLR_MONTANTTTCDEV,
+          MLR_CODECOND = @MLR_CODECOND,
+          MLR_totalbase = @MLR_totalbase
+        WHERE REPLACE(REPLACE(REPLACE(MLR_ORGREMISE, ' ', ''), CHAR(160), ''), CHAR(8239), '') = @cleanCode
+          AND MLR_DATEPIECE = @MLR_DATEPIECE
+      `);
+
+      return res.status(200).json({ message: 'Remise mise à jour avec succès.' });
+    } else {
+      // Aucune remise trouvée : on insère
+      await request.query(`
+        INSERT INTO REMISE (
+          MLR_ORGREMISE, MLR_TYPEREMISE, GTR_LIBELLE, MLR_REMISE,
+          MLR_VALEURREMDEV, MLR_MONTANTHTDEV, MLR_MONTANTTTCDEV,
+          MLR_CODECOND, MLR_totalbase, MLR_DATEPIECE
+        ) VALUES (
+          @MLR_ORGREMISE, @MLR_TYPEREMISE, @GTR_LIBELLE, @MLR_REMISE,
+          @MLR_VALEURREMDEV, @MLR_MONTANTHTDEV, @MLR_MONTANTTTCDEV,
+          @MLR_CODECOND, @MLR_totalbase, @MLR_DATEPIECE
+        )
+      `);
+
+      return res.status(201).json({ message: 'Nouvelle remise créée.' });
+    }
+
+  } catch (err) {
+    console.error('Erreur updateRemise:', err);
+    res.status(500).json({
+      message: 'Erreur lors de la mise à jour ou de la création de la remise.',
+      error: err.message
+    });
+  }
+};
+
+
+
+
+
 exports.getCategoriesByFamille = async (req, res) => {
   const { famille } = req.params;
 
@@ -331,19 +549,39 @@ exports.getArticlesByCategorie = async (req, res) => {
   try {
     const pool = await poolPromise;
 
-    // 1. Récupérer les articles
     const result = await pool.request()
       .input('categorie', sql.NVarChar, categorie)
       .query(`
-        SELECT TOP 100 *
-        FROM ARTICLE
-        WHERE GA_FAMILLENIV2 = @categorie
-        ORDER BY GA_DATECREATION DESC
+        SELECT TOP 5 
+          A.GA_ARTICLE,
+          A.GA_CODEARTICLE,
+          A.GA_LIBELLE,
+          A.GA_PVTTC,
+          A.GA_CODEDIM1, A.GA_GRILLEDIM1,
+          A.GA_CODEDIM2, A.GA_GRILLEDIM2,
+          A.GA_CODEDIM3, A.GA_GRILLEDIM3,
+          A.GA_CODEDIM4, A.GA_GRILLEDIM4,
+          A.GA_CODEDIM5, A.GA_GRILLEDIM5,
+          SUM(ISNULL(D.GQ_PHYSIQUE, 0)) AS QUANTITE_TOTALE
+        FROM ARTICLE A
+        LEFT JOIN DISPO D 
+          ON REPLACE(D.GQ_ARTICLE, ' ', '') = REPLACE(A.GA_ARTICLE, ' ', '')
+         AND D.GQ_CLOTURE = 'X'
+        WHERE A.GA_FAMILLENIV2 = @categorie
+        GROUP BY 
+          A.GA_ARTICLE, A.GA_CODEARTICLE, A.GA_LIBELLE, A.GA_PVTTC,
+          A.GA_CODEDIM1, A.GA_GRILLEDIM1,
+          A.GA_CODEDIM2, A.GA_GRILLEDIM2,
+          A.GA_CODEDIM3, A.GA_GRILLEDIM3,
+          A.GA_CODEDIM4, A.GA_GRILLEDIM4,
+          A.GA_CODEDIM5, A.GA_GRILLEDIM5
+        HAVING SUM(ISNULL(D.GQ_PHYSIQUE, 0)) > 0
+        ORDER BY MAX(A.GA_DATECREATION) DESC
       `);
 
     const articles = result.recordset;
 
-    // 2. Ajouter les dimensions
+    // Récupérer les dimensions (si besoin)
     const articlesWithDimensions = await Promise.all(
       articles.map(async (article) => {
         const dimensions = [];
@@ -351,40 +589,31 @@ exports.getArticlesByCategorie = async (req, res) => {
         for (let i = 1; i <= 5; i++) {
           const codeDim = article[`GA_CODEDIM${i}`];
           const grilleDim = article[`GA_GRILLEDIM${i}`];
-          const typeDim = article[`GA_TYPEDIM${i}`];
-
-          if (codeDim && grilleDim && typeDim) {
+          if (codeDim && grilleDim) {
             const dimResult = await pool.request()
               .input('codeDim', sql.NVarChar, codeDim)
               .input('grilleDim', sql.NVarChar, grilleDim)
-              .input('typeDim', sql.NVarChar, typeDim)
               .query(`
-                SELECT GDI_TYPEDIM, GDI_LIBELLE
+                SELECT TOP 1 GDI_TYPEDIM, GDI_LIBELLE
                 FROM DIMENSION
-                WHERE GDI_CODEDIM = @codeDim
-                  AND GDI_GRILLEDIM = @grilleDim
-                  AND GDI_TYPEDIM = @typeDim
+                WHERE GDI_CODEDIM = @codeDim AND GDI_GRILLEDIM = @grilleDim
               `);
-
             if (dimResult.recordset.length > 0) {
-              const dim = dimResult.recordset[0];
-              dimensions.push({
-                type: dim.GDI_TYPEDIM,
-                libelle: dim.GDI_LIBELLE,
-              });
+              dimensions.push(dimResult.recordset[0]);
             }
           }
         }
 
         return {
           ...article,
-          dimensions,
+          dimensions
         };
       })
     );
 
     res.status(200).json(articlesWithDimensions);
   } catch (err) {
+    console.error('❌ Erreur getArticlesByCategorie :', err);
     res.status(500).json({
       message: 'Erreur récupération des articles avec dimensions.',
       error: err.message,
@@ -672,3 +901,76 @@ exports.getArticlesComplet = async (req, res) => {
 };
 
 
+exports.getPromotionsByArticle = async (req, res) => {
+  const { codeArticle } = req.params;
+
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('codeArticle', sql.NVarChar, codeArticle)
+      .query(`
+        SELECT TOP 5 GTR_LIBELLE, MLR_REMISE, MLR_DATEPIECE
+        FROM REMISE
+        WHERE MLR_ORGREMISE = @codeArticle
+          AND MLR_DATEPIECE <= GETDATE()
+        ORDER BY MLR_REMISE DESC
+      `);
+
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: "Erreur récupération promo", error: err.message });
+  }
+};
+
+
+exports.getArticlesPromoted = async (req, res) => {
+  try {
+    const pool = await poolPromise;
+
+    const result = await pool.request().query(`
+      SELECT 
+        A.GA_ARTICLE,
+        A.GA_LIBELLE,
+        A.GA_PVTTC,
+        R.MLR_REMISE,
+        R.MLR_DATEPIECE,
+        R.GTR_LIBELLE,
+        R.MLR_TYPEREMISE
+      FROM ARTICLE A
+      LEFT JOIN REMISE R 
+        ON R.MLR_ORGREMISE = A.GA_ARTICLE
+        AND R.MLR_REMISE IS NOT NULL
+        AND R.MLR_DATEPIECE <= GETDATE()
+        AND R.MLR_CODECOND IS NULL
+    `);
+
+    const articles = result.recordset;
+
+    const articlesWithRemises = articles.map(article => {
+      const prixBase = article.GA_PVTTC ?? 0;
+      const prixRemise = appliquerRemise(prixBase, article.MLR_REMISE);
+
+      return {
+        code: article.GA_ARTICLE,
+        libelle: article.GA_LIBELLE,
+        prix_base: prixBase,
+        prix_remise: prixRemise,
+        remise: {
+          pourcentage: article.MLR_REMISE,
+          libelle: article.GTR_LIBELLE,
+          type: article.MLR_TYPEREMISE,
+          date_effet: article.MLR_DATEPIECE
+        }
+      };
+    });
+
+    res.status(200).json(articlesWithRemises);
+
+  } catch (err) {
+    console.error('Erreur getArticlesPromoted:', err);
+    res.status(500).json({
+      message: 'Erreur lors de la récupération des articles en promotion.',
+      error: err.message
+    });
+  }
+};

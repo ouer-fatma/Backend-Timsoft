@@ -15,15 +15,22 @@ router.get('/categorie/:categorie', articleController.getArticlesByCategorie);
 
 // ✅ CRUD
 router.post('/', upload.single('image'), articleController.createArticle);
+router.post('/remise', articleController.createRemise);
 router.put('/:id', upload.single('image'), articleController.updateArticle);
+router.put('/remise', articleController.updateRemise);
 router.delete('/:id', articleController.deleteArticle);
 
 // ✅ Détails d’un article (à placer après routes spécifiques !)
 router.get('/:codeArticle/details', articleController.getArticleDetails);
 router.get('/:codeArticle/depots', articleController.getDepotsByArticleDimensions);
 router.get('/:codeArticle/quantite/:dim1/:dim2', articleController.getQuantiteParDimensions);
+router.get('/:codeArticle/promotions', articleController.getPromotionsByArticle);
 router.get('/dimensions/:codeArticle', articleController.getDimensionsByArticle);
 router.get('/articles/:gaArticle', articleController.getArticleByGA);
+
+
+// ✅ Articles en promotion uniquement
+router.get('/promoted', articleController.getArticlesPromoted);
 
 // ✅ Fallback général
 router.get('/', articleController.getAllArticles);

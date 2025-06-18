@@ -45,7 +45,13 @@ exports.getOrdersByCodeTiers = async (req, res) => {
     const pool = await poolPromise;
     const result = await pool.request()
       .input('codeTiers', sql.NVarChar, codeTiers)
-      .query('SELECT * FROM PIECE WHERE GP_TIERS = @codeTiers ORDER BY GP_DATECREATION DESC');
+      .query(`
+  SELECT * FROM PIECE 
+  WHERE GP_TIERS = @codeTiers 
+    AND GP_NATUREPIECEG = 'CC' 
+  ORDER BY GP_DATECREATION DESC
+`);
+
 
     res.status(200).json(result.recordset);
   } catch (err) {
@@ -465,22 +471,6 @@ exports.getOrdersEnAttente = async (req, res) => {
     res.status(500).json({ message: 'Erreur récupération commandes en attente.', error: err.message });
   }
 };
-
-exports.getOrdersRecues = async (req, res) => {
-  try {
-    const pool = await poolPromise;
-    const result = await pool.request()
-      .query(`
-        SELECT * FROM PIECE
-        WHERE GP_DATERECEPTION IS NOT NULL
-        ORDER BY GP_DATERECEPTION DESC
-      `);
-    res.status(200).json(result.recordset);
-  } catch (err) {
-    res.status(500).json({ message: 'Erreur chargement commandes reçues', error: err.message });
-  }
-}; 
-
 exports.marquerCommandeCommePrete = async (req, res) => {
   const { nature, souche, numero, indice } = req.params;
 
@@ -502,27 +492,246 @@ exports.marquerCommandeCommePrete = async (req, res) => {
     res.status(500).json({ message: 'Erreur mise à jour commande.', error: err.message });
   }
 };
-
-exports.marquerCommandeCommeRecue = async (req, res) => {
+exports.createBonDeLivraisonSansLien = async (req, res) => {
   const { nature, souche, numero, indice } = req.params;
+
+  try {
+    const pool = await poolPromise;
+
+    // 1. Récupérer la commande source
+    const commandeRes = await pool.request()
+      .input('nature', sql.NVarChar, nature)
+      .input('souche', sql.NVarChar, souche)
+      .input('numero', sql.Int, numero)
+      .input('indice', sql.NVarChar, indice)
+      .query(`
+        SELECT * FROM PIECE
+        WHERE GP_NATUREPIECEG = @nature AND GP_SOUCHE = @souche 
+          AND GP_NUMERO = @numero AND GP_INDICEG = @indice
+      `);
+
+    if (commandeRes.recordset.length === 0) {
+      return res.status(404).json({ message: 'Commande non trouvée.' });
+    }
+
+    const commande = commandeRes.recordset[0];
+
+    // 2. Générer un nouveau numéro de BL
+    const blNumeroRes = await pool.request().query(`
+      SELECT ISNULL(MAX(GP_NUMERO), 0) + 1 AS newNumero 
+      FROM PIECE WHERE GP_NATUREPIECEG = 'BL'
+    `);
+    const newBLNumero = blNumeroRes.recordset[0].newNumero;
+
+    // ⚠️ GP_LIBRETIERS1 est de type nvarchar(6), on doit limiter la longueur
+    const origineLabel = numero.toString().slice(-6); // max 6 caractères
+
+    // 3. Créer l'en-tête du BL
+    await pool.request()
+      .input('nature', sql.NVarChar, 'BL')
+      .input('souche', sql.NVarChar, commande.GP_SOUCHE)
+      .input('numero', sql.Int, newBLNumero)
+      .input('indice', sql.Int, 1)
+      .input('tiers', sql.NVarChar, commande.GP_TIERS)
+      .input('date', sql.DateTime, new Date())
+      .input('origine', sql.NVarChar(6), origineLabel) // ✅ longueur respectée
+      .query(`
+        INSERT INTO PIECE (
+          GP_NATUREPIECEG, GP_SOUCHE, GP_NUMERO, GP_INDICEG,
+          GP_TIERS, GP_DATECREATION, GP_LIBRETIERS1
+        )
+        VALUES (
+          @nature, @souche, @numero, @indice,
+          @tiers, @date, @origine
+        )
+      `);
+
+    // 4. Copier les lignes de la commande
+    const lignesRes = await pool.request()
+      .input('nature', sql.NVarChar, nature)
+      .input('souche', sql.NVarChar, souche)
+      .input('numero', sql.Int, numero)
+      .input('indice', sql.NVarChar, indice)
+      .query(`
+        SELECT * FROM LIGNE
+        WHERE GL_NATUREPIECEG = @nature AND GL_SOUCHE = @souche 
+          AND GL_NUMERO = @numero AND GL_INDICEG = @indice
+      `);
+
+    const lignes = lignesRes.recordset;
+
+    for (let i = 0; i < lignes.length; i++) {
+      const ligne = lignes[i];
+      await pool.request()
+        .input('nature', sql.NVarChar, 'BL')
+        .input('souche', sql.NVarChar, commande.GP_SOUCHE)
+        .input('numero', sql.Int, newBLNumero)
+        .input('indice', sql.Int, 1)
+        .input('article', sql.NVarChar, ligne.GL_ARTICLE)
+        .input('qte', sql.Numeric(19, 4), ligne.GL_QTEFACT)
+        .input('numligne', sql.Int, i + 1)
+        .input('codesdim', sql.NVarChar, ligne.GL_CODESDIM ?? '')
+        .input('tiers', sql.NVarChar, ligne.GL_TIERS)
+        .query(`
+          INSERT INTO LIGNE (
+            GL_NATUREPIECEG, GL_SOUCHE, GL_NUMERO, GL_INDICEG,
+            GL_ARTICLE, GL_QTEFACT, GL_NUMLIGNE, GL_CODESDIM, GL_TIERS
+          )
+          VALUES (
+            @nature, @souche, @numero, @indice,
+            @article, @qte, @numligne, @codesdim, @tiers
+          )
+        `);
+    }
+
+    res.status(201).json({
+      message: 'Bon de livraison généré avec succès.',
+      BL: `${commande.GP_SOUCHE}/${newBLNumero}/1`
+    });
+
+  } catch (err) {
+    console.error("❌ Erreur création BL :", err);
+    res.status(500).json({ message: 'Erreur serveur.', error: err.message });
+  }
+};
+
+
+exports.getBonsDeLivraison = async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request().query(`
+      SELECT * FROM PIECE
+      WHERE GP_NATUREPIECEG = 'BL'
+      ORDER BY GP_DATECREATION DESC
+    `);
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur récupération BL.', error: err.message });
+  }
+};
+exports.marquerBLCommePrepare = async (req, res) => {
+  const { nature, souche, numero, indice } = req.params;
+
   try {
     const pool = await poolPromise;
     const result = await pool.request()
-      .input('GP_NATUREPIECEG', sql.NVarChar(3), nature)
-      .input('GP_SOUCHE', sql.NVarChar(6), souche)
-      .input('GP_NUMERO', sql.Int, parseInt(numero))
-      .input('GP_INDICEG', sql.Int, parseInt(indice))
+      .input('GP_NATUREPIECEG', sql.NVarChar, nature)
+      .input('GP_SOUCHE', sql.NVarChar, souche)
+      .input('GP_NUMERO', sql.Int, numero)
+      .input('GP_INDICEG', sql.Int, indice)
       .query(`
         UPDATE PIECE
-        SET GP_DATERECEPTION = GETDATE()
-        WHERE GP_NATUREPIECEG = @GP_NATUREPIECEG
-          AND GP_SOUCHE = @GP_SOUCHE
-          AND GP_NUMERO = @GP_NUMERO
-          AND GP_INDICEG = @GP_INDICEG
+        SET GP_STATUTPIECE = 'PRE'
+        WHERE GP_NATUREPIECEG=@GP_NATUREPIECEG AND GP_SOUCHE=@GP_SOUCHE
+          AND GP_NUMERO=@GP_NUMERO AND GP_INDICEG=@GP_INDICEG
       `);
 
-    res.status(200).json({ message: 'Commande marquée comme reçue.' });
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ message: "Bon de livraison introuvable." });
+    }
+
+    res.status(200).json({ message: "Bon de livraison marqué comme prêt." });
+
   } catch (err) {
-    res.status(500).json({ message: 'Erreur lors de la réception de la commande.', error: err.message });
+    res.status(500).json({ message: "Erreur lors de la mise à jour.", error: err.message });
+  }
+};
+exports.getBonDeLivraisonDetails = async (req, res) => {
+  const { nature, souche, numero, indice } = req.params;
+
+  try {
+    const pool = await poolPromise;
+
+    // 1. Vérifier que le BL existe
+    const pieceResult = await pool.request()
+      .input('nature', sql.NVarChar(3), nature)
+      .input('souche', sql.NVarChar(6), souche)
+      .input('numero', sql.Int, parseInt(numero))
+      .input('indice', sql.NVarChar(3), indice)
+      .query(`
+        SELECT * FROM PIECE
+        WHERE GP_NATUREPIECEG=@nature AND GP_SOUCHE=@souche AND GP_NUMERO=@numero AND GP_INDICEG=@indice
+      `);
+
+    if (pieceResult.recordset.length === 0) {
+      return res.status(404).json({ message: 'Bon de livraison non trouvé.' });
+    }
+
+    const piece = pieceResult.recordset[0];
+
+    // 2. Récupérer les lignes + article
+    const lignesResult = await pool.request()
+      .input('nature', sql.NVarChar(3), nature)
+      .input('souche', sql.NVarChar(6), souche)
+      .input('numero', sql.Int, parseInt(numero))
+      .input('indice', sql.NVarChar(3), indice)
+      .query(`
+        SELECT 
+          L.*, 
+          A.GA_LIBELLE, 
+          A.GA_PVTTC
+        FROM LIGNE L
+        LEFT JOIN ARTICLE A ON A.GA_ARTICLE = L.GL_ARTICLE
+        WHERE L.GL_NATUREPIECEG=@nature AND L.GL_SOUCHE=@souche AND L.GL_NUMERO=@numero AND L.GL_INDICEG=@indice
+      `);
+
+    res.status(200).json({
+      bonLivraison: piece,
+      lignes: lignesResult.recordset
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      message: 'Erreur récupération détails BL.',
+      error: err.message
+    });
+  }
+};
+exports.getDepotsDisponiblesPourCommande = async (req, res) => {
+  const { numero, souche } = req.params;
+
+  try {
+    const pool = await poolPromise;
+
+    const result = await pool.request()
+      .input('numero', sql.Int, numero)
+      .input('souche', sql.NVarChar, souche)
+      .query(`
+        SELECT 
+          L.GL_ARTICLE,
+          A.GA_LIBELLE,
+          L.GL_QTEFACT,
+          D.GQ_DEPOT,
+          SUM(D.GQ_PHYSIQUE) AS quantite
+        FROM LIGNE L
+        JOIN ARTICLE A ON A.GA_ARTICLE = L.GL_ARTICLE
+        JOIN DISPO D ON D.GQ_ARTICLE = L.GL_ARTICLE
+        WHERE L.GL_NUMERO = @numero AND L.GL_SOUCHE = @souche
+          AND D.GQ_CLOTURE = 'X'
+        GROUP BY L.GL_ARTICLE, A.GA_LIBELLE, L.GL_QTEFACT, D.GQ_DEPOT
+      `);
+
+    const data = result.recordset;
+
+    // Regroupe par article
+    const regrouped = {};
+    data.forEach(row => {
+      if (!regrouped[row.GL_ARTICLE]) {
+        regrouped[row.GL_ARTICLE] = {
+          article: row.GL_ARTICLE,
+          libelle: row.GA_LIBELLE,
+          qte_demandee: row.GL_QTEFACT,
+          depots_disponibles: [],
+        };
+      }
+      regrouped[row.GL_ARTICLE].depots_disponibles.push({
+        depot: row.GQ_DEPOT,
+        quantite: row.quantite,
+      });
+    });
+
+    res.status(200).json(Object.values(regrouped));
+  } catch (err) {
+    res.status(500).json({ message: "Erreur récupération dépôts", error: err.message });
   }
 };

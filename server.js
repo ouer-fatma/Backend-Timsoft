@@ -6,6 +6,7 @@ const path = require("path");
 
 const authRoutes = require('./routes/authRoutes');
 const articleRoutes = require('./routes/articleRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 const userRoutes = require('./routes/userRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const panierRoutes = require('./routes/panierRoutes');
@@ -42,7 +43,7 @@ poolPromise
 // ✅ Définir les routes
 app.use('/auth', authRoutes);
 app.use('/articles', articleRoutes);
-
+app.use('/notifications', notificationRoutes);
 app.use('/users', userRoutes);
 app.use('/orders', orderRoutes);
 app.use('/panier', panierRoutes);
