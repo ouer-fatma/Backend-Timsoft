@@ -1,11 +1,10 @@
-// utils/sendNotification.js
+//sendNotification.js
 const admin = require('firebase-admin');
+const { saveNotificationToFile } = require('./notificationStore');
 
 /**
  * Envoie une notification FCM à un topic donné
- * @param {string} title - Titre de la notification
- * @param {string} body - Contenu de la notification
- * @param {string} topic - Nom du topic (ex: "promotions")
+ * et la stocke localement dans le fichier JSON
  */
 const sendNotification = async (title, body, topic = 'promotions') => {
   const message = {
@@ -13,12 +12,21 @@ const sendNotification = async (title, body, topic = 'promotions') => {
       title,
       body,
     },
-    topic, // tous les utilisateurs abonnés à ce topic reçoivent la notif
+    topic,
   };
 
   try {
     const response = await admin.messaging().send(message);
     console.log('✅ Notification envoyée avec succès:', response);
+
+    // Stocker dans le fichier local
+    saveNotificationToFile({
+      title,
+      message: body,
+      topic,
+      date: new Date().toISOString(),
+    });
+
   } catch (error) {
     console.error('❌ Erreur lors de l’envoi de la notification:', error);
   }

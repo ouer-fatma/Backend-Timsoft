@@ -1,6 +1,7 @@
 //orderController
 const Order = require('../models/Order');
-const { sql, poolPromise } = require('../db');
+const { sql, poolPromise, dbConfig } = require('../db');
+
 
 // Récupérer toutes les commandes
 exports.getAllOrders = async (req, res) => {
@@ -44,20 +45,28 @@ exports.getOrdersByCodeTiers = async (req, res) => {
   try {
     const pool = await poolPromise;
     const result = await pool.request()
-      .input('codeTiers', sql.NVarChar, codeTiers)
-      .query(`
-  SELECT * FROM PIECE 
-  WHERE GP_TIERS = @codeTiers 
-    AND GP_NATUREPIECEG = 'CC' 
-  ORDER BY GP_DATECREATION DESC
-`);
-
+  .input('codeTiers', sql.NVarChar, codeTiers)
+  .query(`
+    SELECT 
+      GP_NUMERO,
+      GP_TIERS,
+      GP_DATECREATION,
+      GP_STATUTPIECE,
+      GP_SOUCHE,
+      GP_NATUREPIECEG,
+      GP_INDICEG
+    FROM PIECE 
+    WHERE GP_TIERS = @codeTiers 
+      AND GP_NATUREPIECEG = 'CC' 
+    ORDER BY GP_DATECREATION DESC
+  `);
 
     res.status(200).json(result.recordset);
   } catch (err) {
     res.status(500).json({ message: 'Erreur récupération commandes client.', error: err.message });
   }
 };
+
 
 
 exports.getOrderDetails = async (req, res) => {
@@ -638,7 +647,7 @@ exports.marquerBLCommePrepare = async (req, res) => {
 };
 exports.getBonDeLivraisonDetails = async (req, res) => {
   const { nature, souche, numero, indice } = req.params;
-
+   
   try {
     const pool = await poolPromise;
 
@@ -698,39 +707,242 @@ exports.getDepotsDisponiblesPourCommande = async (req, res) => {
       .input('souche', sql.NVarChar, souche)
       .query(`
         SELECT 
-          L.GL_ARTICLE,
-          A.GA_LIBELLE,
-          L.GL_QTEFACT,
-          D.GQ_DEPOT,
+          D.GQ_DEPOT AS depot,
           SUM(D.GQ_PHYSIQUE) AS quantite
         FROM LIGNE L
-        JOIN ARTICLE A ON A.GA_ARTICLE = L.GL_ARTICLE
         JOIN DISPO D ON D.GQ_ARTICLE = L.GL_ARTICLE
         WHERE L.GL_NUMERO = @numero AND L.GL_SOUCHE = @souche
           AND D.GQ_CLOTURE = 'X'
-        GROUP BY L.GL_ARTICLE, A.GA_LIBELLE, L.GL_QTEFACT, D.GQ_DEPOT
+        GROUP BY D.GQ_DEPOT
+        HAVING SUM(D.GQ_PHYSIQUE) > 0
       `);
 
-    const data = result.recordset;
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: "Erreur récupération dépôts", error: err.message });
+  }
+};
+exports.updateOrderStatus = async (req, res) => {
+  const { nature, souche, numero, indice } = req.params;
+  const { status } = req.body;
 
-    // Regroupe par article
-    const regrouped = {};
-    data.forEach(row => {
-      if (!regrouped[row.GL_ARTICLE]) {
-        regrouped[row.GL_ARTICLE] = {
-          article: row.GL_ARTICLE,
-          libelle: row.GA_LIBELLE,
-          qte_demandee: row.GL_QTEFACT,
-          depots_disponibles: [],
-        };
-      }
-      regrouped[row.GL_ARTICLE].depots_disponibles.push({
-        depot: row.GQ_DEPOT,
-        quantite: row.quantite,
+  try {
+    const pool = await poolPromise;
+
+    await pool.request()
+      .input('nature', sql.NVarChar(3), nature)
+      .input('souche', sql.NVarChar(6), souche)
+      .input('numero', sql.Int, parseInt(numero))
+      .input('indice', sql.NVarChar(3), indice)
+      .input('status', sql.NVarChar(3), status)
+      .query(`
+        UPDATE PIECE
+        SET GP_STATUTPIECE = @status
+        WHERE GP_NATUREPIECEG = @nature AND GP_SOUCHE = @souche
+          AND GP_NUMERO = @numero AND GP_INDICEG = @indice
+      `);
+
+    res.status(200).json({ message: "Statut mis à jour avec succès" });
+  } catch (error) {
+    console.error("Erreur mise à jour statut:", error);
+    res.status(500).json({ message: "Erreur serveur lors de la mise à jour du statut" });
+  }
+};
+exports.getReservationsPourDepot = async (req, res) => {
+  const { depot } = req.params;
+
+  try {
+    await sql.connect(dbConfig);
+
+    const query = `
+      SELECT *
+      FROM PIECE
+      WHERE GP_LIBRETIERS1 = 'S01'
+        AND GP_DEPOT = @depot
+        AND GP_STATUTPIECE = 'ATT'
+    `;
+
+    const request = new sql.Request();
+    request.input('depot', sql.VarChar, depot);
+
+    const result = await request.query(query);
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    console.error("Erreur getReservationsPourDepot:", err);
+    res.status(500).json({ message: "Erreur serveur" });
+  }
+};
+
+
+// controllers/orderController.js
+// controllers/orderController.js
+
+exports.getReservationsPourMagasinier = async (req, res) => {
+  const { codeCommercial } = req.user;
+
+  if (!codeCommercial) {
+    return res.status(403).json({ message: 'CodeCommercial manquant.' });
+  }
+
+  try {
+    const pool = await poolPromise;
+
+    // Obtenir le GCL_ETABLISSEMENT à partir du codeCommercial
+    const etabResult = await pool.request()
+      .input('CodeCommercial', sql.VarChar, codeCommercial)
+      .query(`
+        SELECT GCL_ETABLISSEMENT 
+        FROM Commercial 
+        WHERE GCL_COMMERCIAL = @CodeCommercial
+      `);
+
+    if (etabResult.recordset.length === 0) {
+      return res.status(404).json({ message: 'Commercial introuvable.' });
+    }
+
+    const etablissement = etabResult.recordset[0].GCL_ETABLISSEMENT;
+
+    // Récupérer les réservations pour ce dépôt
+    const result = await pool.request()
+      .input('Depot', sql.VarChar, etablissement)
+      .query(`
+        SELECT *
+        FROM PIECE
+        WHERE GP_LIBRETIERS1 = 'S01'
+          AND GP_DEPOT = @Depot
+          AND GP_STATUTPIECE = 'ATT'
+      `);
+
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    console.error("Erreur getReservationsPourMagasinier:", err);
+    res.status(500).json({ message: "Erreur serveur" });
+  }
+};
+exports.getReservationDetails = async (req, res) => {
+  const { souche, numero, indice } = req.params;
+
+  try {
+    const nature = 'CC'; // 🔥 Réservations sont de type CC
+    const pool = await poolPromise;
+
+    // 1. Récupération de la commande
+    const pieceResult = await pool.request()
+      .input('nature', sql.NVarChar(3), nature)
+      .input('souche', sql.NVarChar(6), souche)
+      .input('numero', sql.Int, parseInt(numero))
+      .input('indice', sql.NVarChar(3), indice)
+      .query(`
+        SELECT * FROM PIECE
+        WHERE GP_NATUREPIECEG=@nature AND GP_SOUCHE=@souche AND GP_NUMERO=@numero AND GP_INDICEG=@indice
+      `);
+
+    if (pieceResult.recordset.length === 0) {
+      return res.status(404).json({ message: 'Réservation non trouvée.' });
+    }
+
+    const commande = pieceResult.recordset[0];
+    const GP_TIERS = commande.GP_TIERS?.trim();
+
+    // 2. Récupération des lignes
+    const lignesResult = await pool.request()
+      .input('nature', sql.NVarChar(3), nature)
+      .input('souche', sql.NVarChar(6), souche)
+      .input('numero', sql.Int, parseInt(numero))
+      .input('indice', sql.NVarChar(3), indice)
+      .query(`
+        SELECT 
+          L.*, 
+          A.GA_LIBELLE, 
+          A.GA_PVTTC
+        FROM LIGNE L
+        LEFT JOIN ARTICLE A ON A.GA_ARTICLE = L.GL_ARTICLE
+        WHERE L.GL_NATUREPIECEG=@nature AND L.GL_SOUCHE=@souche AND L.GL_NUMERO=@numero AND L.GL_INDICEG=@indice
+      `);
+
+    const lignes = [];
+    let totalApresRemise = 0;
+
+    for (const ligne of lignesResult.recordset) {
+      const { GL_ARTICLE, GL_QTEFACT = 0, GA_PVTTC = 0 } = ligne;
+
+      const remiseResult = await pool.request()
+        .input('gaArticle', sql.NVarChar, GL_ARTICLE.trim())
+        .input('codeTiers', sql.NVarChar, GP_TIERS)
+        .input('dateCommande', sql.DateTime, commande.GP_DATECREATION)
+        .query(`
+          SELECT TOP 1 MLR_REMISE, GTR_LIBELLE, MLR_CODECOND, MLR_MONTANTTTCDEV
+          FROM REMISE
+          WHERE RTRIM(MLR_ORGREMISE) = @gaArticle
+            AND RTRIM(MLR_CODECOND) = @codeTiers
+            AND MLR_DATEPIECE <= @dateCommande
+          ORDER BY MLR_DATEPIECE DESC
+        `);
+
+      const promo = remiseResult.recordset[0] || {
+        MLR_REMISE: 0,
+        GTR_LIBELLE: 'Aucune remise',
+        MLR_CODECOND: 'N/A',
+        MLR_MONTANTTTCDEV: 0
+      };
+
+      const remisePourcent = promo.MLR_REMISE || 0;
+      const montantRemise = (GA_PVTTC * GL_QTEFACT * remisePourcent) / 100;
+      const totalLigneApresRemise = parseFloat((GA_PVTTC * GL_QTEFACT - montantRemise).toFixed(2));
+
+      totalApresRemise += totalLigneApresRemise;
+
+      lignes.push({
+        ...ligne,
+        GL_TOTALLIGNE: totalLigneApresRemise,
+        GL_NUMPIECE: `CC/${souche}/${numero}/${indice}`,
+        PROMO: {
+          REMISE: `${remisePourcent}%`,
+          LIBELLE: promo?.GTR_LIBELLE || '',
+          CODE_COND: promo?.MLR_CODECOND || '',
+          REMISE_MONTANT: parseFloat(montantRemise.toFixed(2))
+        }
       });
+    }
+
+    res.status(200).json({
+      commande,
+      lignes,
+      TOTAL_APRES_REMISE: parseFloat(totalApresRemise.toFixed(2))
     });
 
-    res.status(200).json(Object.values(regrouped));
+  } catch (err) {
+    res.status(500).json({
+      message: 'Erreur serveur lors de la récupération des détails de la réservation.',
+      error: err.message
+    });
+  }
+};
+exports.getDepotsDisponiblesPourArticleCommande = async (req, res) => {
+  const { souche, numero, article } = req.params;
+
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request()
+      .input('souche', sql.NVarChar, souche)
+      .input('numero', sql.Int, parseInt(numero))
+      .input('article', sql.NVarChar, article)
+      .query(`
+      SELECT 
+          D.GQ_DEPOT AS depot,
+          SUM(D.GQ_PHYSIQUE) AS quantite
+        FROM LIGNE L
+        JOIN DISPO D ON REPLACE(LTRIM(RTRIM(D.GQ_ARTICLE)), ' ', '') = REPLACE(LTRIM(RTRIM(L.GL_ARTICLE)), ' ', '')
+        WHERE L.GL_NUMERO = @numero
+          AND L.GL_SOUCHE = @souche
+          AND REPLACE(LTRIM(RTRIM(D.GQ_ARTICLE)), ' ', '') = REPLACE(LTRIM(RTRIM(@article)), ' ', '')
+          AND D.GQ_CLOTURE = 'X'
+        GROUP BY D.GQ_DEPOT
+        HAVING SUM(D.GQ_PHYSIQUE) > 0
+
+      `);
+
+    res.status(200).json(result.recordset);
   } catch (err) {
     res.status(500).json({ message: "Erreur récupération dépôts", error: err.message });
   }

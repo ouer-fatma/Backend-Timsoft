@@ -29,4 +29,4 @@ const poolPromise = new sql.ConnectionPool(config)
     process.exit(1); // Stoppe le serveur si la connexion échoue
   });
 
-module.exports = { sql, poolPromise };
+module.exports = { sql, poolPromise, dbConfig: config };

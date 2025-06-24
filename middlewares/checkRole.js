@@ -1,22 +1,25 @@
-//checkRole
 const jwt = require('jsonwebtoken');
 
-function checkRole(role) {
+function checkRole(requiredRole) {
   return (req, res, next) => {
-    const token = req.headers.authorization?.split(' ')[1]; // Récupérer le token du header
+    const authHeader = req.headers.authorization;
 
-    if (!token) {
-      return res.status(401).json({ message: 'Token manquant.' });
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ message: 'Token manquant ou mal formé.' });
     }
 
+    const token = authHeader.split(' ')[1];
+
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET); // Vérifier le token
-      if (decoded.role !== role) {
-        return res.status(403).json({ message: 'Accès interdit. Rôle requis : ' + role });
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+      req.user = decoded; // ✅ toujours injecter l'utilisateur, même si le rôle est faux
+
+      if (decoded.role !== requiredRole) {
+        return res.status(403).json({ message: `Accès interdit. Rôle requis : ${requiredRole}` });
       }
 
-      req.user = decoded; // Ajouter les informations de l'utilisateur à la requête
-      next(); // Passer au contrôleur suivant
+      next(); // ✅ rôle OK, on continue
     } catch (err) {
       return res.status(401).json({ message: 'Token invalide.' });
     }

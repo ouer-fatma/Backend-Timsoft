@@ -175,3 +175,16 @@ exports.confirmerRetraitClient = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+exports.getDepots = async (req, res) => {
+  const pool = await poolPromise;
+  try {
+    const result = await pool.request().query(`
+      SELECT GDE_DEPOT AS code, GDE_LIBELLE AS libelle
+      FROM DEPOT
+    `); // 🔁 Suppression de WHERE GDE_ACTIF = 1
+    res.status(200).json(result.recordset);
+  } catch (err) {
+    console.error("Erreur getDepots:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
