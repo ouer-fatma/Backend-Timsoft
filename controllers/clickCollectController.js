@@ -15,7 +15,7 @@ exports.getStockByArticle = async (req, res) => {
           SUM(ISNULL(D.GQ_RESERVECLI, 0)) AS RESERVECLI,
           SUM(ISNULL(D.GQ_PHYSIQUE, 0) - ISNULL(D.GQ_RESERVECLI, 0)) AS DISPONIBLE
         FROM DISPO D
-        JOIN DEPOT ON D.GQ_DEPOT = DEPOT.GDE_DEPOT
+        JOIN DEPOTS ON D.GQ_DEPOT = DEPOT.GDE_DEPOT
         WHERE REPLACE(D.GQ_ARTICLE, ' ', '') = REPLACE(@article, ' ', '')
           AND GQ_CLOTURE = 'X'
         GROUP BY D.GQ_DEPOT, DEPOT.GDE_LIBELLE
@@ -180,7 +180,7 @@ exports.getDepots = async (req, res) => {
   try {
     const result = await pool.request().query(`
       SELECT GDE_DEPOT AS code, GDE_LIBELLE AS libelle
-      FROM DEPOT
+      FROM DEPOTS
     `); // 🔁 Suppression de WHERE GDE_ACTIF = 1
     res.status(200).json(result.recordset);
   } catch (err) {

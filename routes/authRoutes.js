@@ -3,25 +3,29 @@ const router = express.Router();
 
 const {
   registerUser,
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
   loginUser,
   googleSignIn,
   adminDashboard,
   magasinDashboard,
   clientDashboard,
-  creerCompteCommercial,
   getDepotsDisponibles,
   getBLPourMagasinier // ✅ garder UNE SEULE fois ici
 } = require('../controllers/authController');
-
 const validateRegister = require('../middlewares/validateRegister');
 const checkRole = require('../middlewares/checkRole');
 
 // Routes
 router.post('/register', validateRegister, registerUser);
+router.post('/forgot-password', forgotPassword);
+router.post('/reset-password', resetPassword);
 router.post('/login', loginUser);
 router.post('/google', googleSignIn);
-router.post('/creer-compte-commercial', checkRole('admin'), creerCompteCommercial);
 
+
+router.get('/verify-email', verifyEmail); 
 router.get('/admin', checkRole('admin'), adminDashboard);
 router.get('/magasin', checkRole('personnel_magasin'), magasinDashboard);
 router.get('/client', checkRole('client'), clientDashboard);

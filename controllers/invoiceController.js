@@ -53,7 +53,7 @@ exports.generateAndDownloadInvoice = async (req, res) => {
         .input('dateCommande', sql.DateTime, commande.GP_DATECREATION)
         .query(`
           SELECT TOP 1 MLR_REMISE, MLR_CODECOND
-          FROM REMISE
+          FROM LIGNEREMISE
           WHERE RTRIM(MLR_ORGREMISE) = @gaArticle
             AND RTRIM(MLR_CODECOND) = @codeTiers
             AND MLR_DATEPIECE <= @dateCommande
@@ -143,7 +143,7 @@ try {
       .input('dateCommande', sql.DateTime, commande.GP_DATECREATION)
       .query(`
         SELECT TOP 1 MLR_REMISE, MLR_CODECOND
-        FROM REMISE
+        FROM LIGNEREMISE
         WHERE RTRIM(MLR_ORGREMISE) = @gaArticle
           AND RTRIM(MLR_CODECOND) = @codeTiers
           AND MLR_DATEPIECE <= @dateCommande
@@ -352,23 +352,35 @@ exports.generateBonLivraison = async (req, res) => {
     // ================================
     // 5.2 Copier les lignes
     // ================================
-    for (const ligne of lignes) {
-      await pool.request()
-        .input('nature', sql.NVarChar(3), 'BL')
-        .input('souche', sql.NVarChar(6), blSouche)
-        .input('numero', sql.Int, newBLNumero)
-        .input('indice', sql.NVarChar(3), blIndice)
-        .input('article', sql.NVarChar(50), ligne.GL_ARTICLE)
-        .input('quantite', sql.Decimal(18, 2), ligne.GL_QTEFACT || 1)
-        .input('depot', sql.NVarChar(10), ligne.GL_DEPOT)
-        .query(`
-          INSERT INTO LIGNE (GL_NATUREPIECEG, GL_SOUCHE, GL_NUMERO, GL_INDICEG, GL_ARTICLE, GL_QTEFACT, GL_DEPOT)
-          VALUES (@nature, @souche, @numero, @indice, @article, @quantite, @depot)
-        `);
-    }
+ let ligneCounter = 1;
+
+for (const ligne of lignes) {
+  await pool.request()
+    .input('nature', sql.NVarChar(3), 'BL')
+    .input('souche', sql.NVarChar(6), blSouche)
+    .input('numero', sql.Int, newBLNumero)
+    .input('indice', sql.NVarChar(3), blIndice)
+    .input('numLigne', sql.Int, ligneCounter)
+    .input('article', sql.NVarChar(50), ligne.GL_ARTICLE)
+    .input('quantite', sql.Decimal(18, 2), ligne.GL_QTEFACT || 1)
+    .input('depot', sql.NVarChar(10), ligne.GL_DEPOT)
+    .query(`
+      INSERT INTO LIGNE (
+        GL_NATUREPIECEG, GL_SOUCHE, GL_NUMERO, GL_INDICEG,
+        GL_NUMLIGNE, GL_ARTICLE, GL_QTEFACT, GL_DEPOT
+      )
+      VALUES (
+        @nature, @souche, @numero, @indice,
+        @numLigne, @article, @quantite, @depot
+      )
+    `);
+
+  ligneCounter++;
+}
+
 
     // 6. Générer le PDF
-    const filePath = path.join(__dirname, `../invoices/bl_${newBLNumero}.pdf`);
+    const filePath = path.join(__dirname, `../invoices/bl_${nature}_${souche}_${numero}_${indice}.pdf`);
     const depotInfo = parsedDepots || commande.GP_DEPOT || '—';
     await generateBonLivraisonPDF(commande, lignes, filePath, depotInfo);
 
@@ -532,29 +544,35 @@ exports.generateBonLivraison = async (req, res) => {
       `);
 
     // 5. Copier les lignes vers le BL
-    for (const ligne of lignes) {
-      await pool.request()
-        .input('nature', sql.NVarChar(3), 'BL')
-        .input('souche', sql.NVarChar(6), blSouche)
-        .input('numero', sql.Int, newBLNumero)
-        .input('indice', sql.NVarChar(3), blIndice)
-        .input('article', sql.NVarChar(50), ligne.GL_ARTICLE)
-        .input('quantite', sql.Decimal(18, 2), ligne.GL_QTEFACT || 1)
-        .input('depot', sql.NVarChar(10), ligne.GL_DEPOT)
-        .query(`
-          INSERT INTO LIGNE (
-            GL_NATUREPIECEG, GL_SOUCHE, GL_NUMERO, GL_INDICEG,
-            GL_ARTICLE, GL_QTEFACT, GL_DEPOT
-          )
-          VALUES (
-            @nature, @souche, @numero, @indice,
-            @article, @quantite, @depot
-          )
-        `);
-    }
+let ligneCounter = 1;
+
+for (const ligne of lignes) {
+  await pool.request()
+    .input('nature', sql.NVarChar(3), 'BL')
+    .input('souche', sql.NVarChar(6), blSouche)
+    .input('numero', sql.Int, newBLNumero)
+    .input('indice', sql.NVarChar(3), blIndice)
+    .input('numLigne', sql.Int, ligneCounter)
+    .input('article', sql.NVarChar(50), ligne.GL_ARTICLE)
+    .input('quantite', sql.Decimal(18, 2), ligne.GL_QTEFACT || 1)
+    .input('depot', sql.NVarChar(10), ligne.GL_DEPOT)
+    .query(`
+      INSERT INTO LIGNE (
+        GL_NATUREPIECEG, GL_SOUCHE, GL_NUMERO, GL_INDICEG,
+        GL_NUMLIGNE, GL_ARTICLE, GL_QTEFACT, GL_DEPOT
+      )
+      VALUES (
+        @nature, @souche, @numero, @indice,
+        @numLigne, @article, @quantite, @depot
+      )
+    `);
+
+  ligneCounter++;
+}
+
 
     // 6. Générer le PDF
-    const filePath = path.join(__dirname, `../invoices/bl_${newBLNumero}.pdf`);
+    const filePath = path.join(__dirname, `../invoices/bl_${nature}_${souche}_${numero}_${indice}.pdf`);
     const depotInfo = parsedDepots || depotBL || '---';
     await generateBonLivraisonPDF({
       ...commande,
@@ -578,6 +596,7 @@ exports.generateBonLivraison = async (req, res) => {
     res.status(500).json({ message: 'Erreur génération PDF BL', error: err.message });
   }
 };
+
 exports.marquerBLCommeExpedie = async (req, res) => {
   const { nature, souche, numero, indice } = req.params;
 
@@ -631,7 +650,7 @@ exports.marquerBLCommeExpedie = async (req, res) => {
 };
 exports.downloadExistingBonLivraison = async (req, res) => {
   const { nature, souche, numero, indice } = req.params;
-  const filePath = path.join(__dirname, `../invoices/bl_${numero}.pdf`);
+  const filePath = path.join(__dirname, `../invoices/bl_${nature}_${souche}_${numero}_${indice}.pdf`);
   
   if (fs.existsSync(filePath)) {
     return res.download(filePath);
@@ -639,3 +658,4 @@ exports.downloadExistingBonLivraison = async (req, res) => {
     return res.status(404).json({ message: "BL introuvable" });
   }
 };
+

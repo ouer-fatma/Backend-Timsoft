@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const axios = require("axios");
 
 const authRoutes = require('./routes/authRoutes');
 const articleRoutes = require('./routes/articleRoutes');
@@ -19,6 +20,7 @@ const stockRoutes = require('./routes/stockRoutes');
 const invoiceRoutes = require('./routes/invoice');
 const stockTransferRoutes = require('./routes/stockTransferRoutes');
 const retourRoutes = require('./routes/retour'); // 👉 nouveau fichier de routes
+const promotionRoutes = require('./routes/promotionRoutes');
 
 
 
@@ -54,6 +56,9 @@ app.use('/api/stock-transfer', stockTransferRoutes);
 app.use('/click-collect', clickCollectRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api', retourRoutes); // 👉 Route ajoutée pour les retours
+app.use('/api/promotions', promotionRoutes);
+app.use('/chatbot', require('./routes/chatbot'));
+
 
 // ✅ Route de test
 app.get('/test', (req, res) => {

@@ -17,7 +17,7 @@ exports.initPanier = async (req, res) => {
       .input('codeTiers', sql.NVarChar(50), cleanCodeTiers)
       .query(`
         SELECT * FROM PIECE
-        WHERE GP_NATUREPIECEG = 'PAN' AND UPPER(GP_TIERS) = @codeTiers
+        WHERE GP_NATUREPIECEG = 'PAN' AND GP_TIERS = @codeTiers
       `);
 
     if (checkPanier.recordset.length > 0) {
@@ -64,21 +64,20 @@ exports.initPanier = async (req, res) => {
   }
 };
 exports.ajouterAuPanier = async (req, res) => {
-  console.log("\ud83d\udce6 Donn\u00e9es re\u00e7ues du front :", req.body);
+  console.log("📦 Données reçues du front :", req.body);
 
   const {
     codeTiers,
     codeArticle,
     quantite,
-    dim1Libelle: dim1,
-    dim2Libelle: dim2,
-    grilleDim1,
-    grilleDim2
+    dim1,
+    dim2,
   } = req.body;
 
-  if (!codeTiers || !codeArticle || !quantite || !dim1 || !dim2 || !grilleDim1 || !grilleDim2) {
+  // ✅ Autoriser les espaces en dim1/dim2, mais pas null/undefined
+  if (!codeTiers || !codeArticle || !quantite || dim1 == null || dim2 == null) {
     return res.status(400).json({
-      message: 'Champs requis : codeTiers, codeArticle, quantite, dim1, dim2, grilleDim1, grilleDim2.',
+      message: 'Champs requis : codeTiers, codeArticle, quantite, dim1, dim2.',
     });
   }
 
@@ -87,35 +86,36 @@ exports.ajouterAuPanier = async (req, res) => {
 
     const cleanTiers = codeTiers.trim().toUpperCase();
     const cleanCodeArticle = codeArticle.trim().toUpperCase();
-    const cleanDim1 = dim1.trim().toUpperCase();
-    const cleanDim2 = dim2.trim().toUpperCase();
-    const cleanGrille1 = grilleDim1.trim().toUpperCase();
-    const cleanGrille2 = grilleDim2.trim().toUpperCase();
+    const cleanDim1 = dim1.trim() === '' ? ' ' : dim1.trim().toUpperCase();
+    const cleanDim2 = dim2.trim() === '' ? ' ' : dim2.trim().toUpperCase();
 
-    const getDimCode = async (libelle, typeDim, grille) => {
+    console.log("✅ dim1:", `"${cleanDim1}"`, "| dim2:", `"${cleanDim2}"`);
+
+    // 🔍 Trouver les codes DIM1 et DIM2 (sauter si ' ')
+    const getDimCode = async (libelle, typeDim) => {
+      if (libelle === ' ') return ' '; // pas de recherche si vide
       const result = await pool.request()
         .input('libelle', sql.NVarChar, libelle)
         .input('type', sql.NVarChar, typeDim)
-        .input('grille', sql.NVarChar, grille)
         .query(`
           SELECT TOP 1 GDI_CODEDIM
           FROM DIMENSION
           WHERE GDI_LIBELLE = @libelle
             AND GDI_TYPEDIM = @type
-            AND GDI_GRILLEDIM = @grille
         `);
       return result.recordset[0]?.GDI_CODEDIM;
     };
 
-    const codeDim1 = await getDimCode(cleanDim1, 'DI1', cleanGrille1);
-    const codeDim2 = await getDimCode(cleanDim2, 'DI2', cleanGrille2);
+    const codeDim1 = await getDimCode(cleanDim1, 'DI1');
+    const codeDim2 = await getDimCode(cleanDim2, 'DI2');
 
     if (!codeDim1 || !codeDim2) {
-      return res.status(400).json({ message: 'Dimensions invalides ou non trouv\u00e9es.' });
+      return res.status(400).json({ message: 'Dimensions invalides ou non trouvées.' });
     }
 
     const codeSDIM = `${codeDim1}-${codeDim2}`;
 
+    // 🔍 Recherche article
     const gaArticleResult = await pool.request()
       .input('codeArticle', sql.NVarChar, cleanCodeArticle)
       .input('dim1', sql.NVarChar, codeDim1)
@@ -130,10 +130,10 @@ exports.ajouterAuPanier = async (req, res) => {
 
     const gaArticle = gaArticleResult.recordset[0]?.GA_ARTICLE;
     if (!gaArticle) {
-      return res.status(404).json({ message: "Aucun article trouv\u00e9 avec ces dimensions." });
+      return res.status(404).json({ message: "Aucun article trouvé avec ces dimensions." });
     }
 
-    // \u2705 Cr\u00e9er un panier si aucun n'existe
+    // 🛒 Panier
     let panierResult = await pool.request()
       .input('codeTiers', sql.NVarChar, cleanTiers)
       .query(`
@@ -145,12 +145,7 @@ exports.ajouterAuPanier = async (req, res) => {
 
     if (panierResult.recordset.length === 0) {
       const numeroResult = await pool.request()
-        .input('codeTiers', sql.NVarChar, cleanTiers)
-        .query(`
-          SELECT ISNULL(MAX(GP_NUMERO), 0) + 1 AS newNumero
-          FROM PIECE
-          WHERE GP_NATUREPIECEG = 'PAN'
-        `);
+        .query(`SELECT ISNULL(MAX(GP_NUMERO), 0) + 1 AS newNumero FROM PIECE WHERE GP_NATUREPIECEG = 'PAN'`);
 
       const newNumero = numeroResult.recordset[0].newNumero;
       await pool.request()
@@ -186,6 +181,7 @@ exports.ajouterAuPanier = async (req, res) => {
       .input('codesdim', sql.NVarChar, codeSDIM)
       .input('codeTiers', sql.NVarChar, cleanTiers);
 
+    // 🔁 Vérifie si ligne existe
     const ligneExist = await request.query(`
       SELECT TOP 1 GL_QTEFACT 
       FROM LIGNE
@@ -214,28 +210,46 @@ exports.ajouterAuPanier = async (req, res) => {
           AND GL_TIERS = @codeTiers
       `);
 
-      return res.status(200).json({ message: 'Quantit\u00e9 mise \u00e0 jour pour cet article avec dimensions.' });
+      return res.status(200).json({ message: 'Quantité mise à jour pour cet article avec dimensions.' });
     }
 
-    await request.query(`
+    // ➕ Sinon, ajouter nouvelle ligne
+    const maxNumLigneResult = await pool.request()
+      .input('nature', sql.NVarChar, GP_NATUREPIECEG)
+      .input('souche', sql.NVarChar, GP_SOUCHE)
+      .input('numero', sql.Int, GP_NUMERO)
+      .input('indice', sql.NVarChar, GP_INDICEG.toString())
+      .query(`
+        SELECT ISNULL(MAX(GL_NUMLIGNE), 0) + 1 AS nextNumLigne
+        FROM LIGNE
+        WHERE GL_NATUREPIECEG = @nature
+          AND GL_SOUCHE = @souche
+          AND GL_NUMERO = @numero
+          AND GL_INDICEG = @indice
+      `);
+
+    const nextNumLigne = maxNumLigneResult.recordset[0].nextNumLigne;
+
+    await request.input('numligne', sql.Int, nextNumLigne).query(`
       INSERT INTO LIGNE (
         GL_NATUREPIECEG, GL_SOUCHE, GL_NUMERO, GL_INDICEG,
+        GL_NUMLIGNE,
         GL_ARTICLE, GL_QTEFACT, GL_CODESDIM, GL_TIERS
       )
       VALUES (
         @nature, @souche, @numero, @indice,
+        @numligne,
         @article, @qte, @codesdim, @codeTiers
       )
     `);
 
-    res.status(201).json({ message: 'Article ajout\u00e9 au panier avec dimensions.' });
+    res.status(201).json({ message: 'Article ajouté au panier avec dimensions.' });
 
   } catch (err) {
-    console.error("\ud83d\udd25 ERREUR AJOUT PANIER :", err);
-    res.status(500).json({ message: 'Erreur lors de l\u2019ajout au panier.', error: err.message });
+    console.error("🔥 ERREUR AJOUT PANIER :", err);
+    res.status(500).json({ message: 'Erreur lors de l’ajout au panier.', error: err.message });
   }
 };
-
 
 
 exports.getPanier = async (req, res) => {

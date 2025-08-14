@@ -9,9 +9,11 @@ router.get('/complet', articleController.getArticlesComplet); // ultra détaill�
 
 // ✅ Recherche et filtres
 router.get('/search/:query', articleController.searchArticles);
-router.get('/familles', articleController.getAllFamilles);
-router.get('/categories/:famille', articleController.getCategoriesByFamille);
-router.get('/categorie/:categorie', articleController.getArticlesByCategorie);
+router.get('/familles/classification', articleController.getClassificationFamilles);
+
+router.get('/famille/:famille/categories', articleController.getCategoriesByFamille);
+router.get('/categorie/:categorie/articles', articleController.getArticlesByCategorie); 
+
 
 // ✅ CRUD
 router.post('/', upload.single('image'), articleController.createArticle);
@@ -21,12 +23,15 @@ router.put('/remise', articleController.updateRemise);
 router.delete('/:id', articleController.deleteArticle);
 
 // ✅ Détails d’un article (à placer après routes spécifiques !)
-router.get('/:codeArticle/details', articleController.getArticleDetails);
-router.get('/:codeArticle/depots', articleController.getDepotsByArticleDimensions);
-router.get('/:codeArticle/quantite/:dim1/:dim2', articleController.getQuantiteParDimensions);
+router.get('/:codeArticle/details', articleController.getArticleDetails); 
+router.get('/:codeArticle/depots', articleController.getDepotsByArticleDimensions); 
+router.get('/:codeArticle/quantite/:dim1?/:dim2?', articleController.getQuantiteParDimensions);
 router.get('/:codeArticle/promotions', articleController.getPromotionsByArticle);
-router.get('/dimensions/:codeArticle', articleController.getDimensionsByArticle);
-router.get('/articles/:gaArticle', articleController.getArticleByGA);
+router.get('/dimensions/:codeArticle', articleController.getDimensionsByArticle); 
+router.get('/articles', articleController.getArticleByGA);
+router.get('/specific', articleController.getThreeSpecificArticles);
+
+
 
 
 // ✅ Articles en promotion uniquement

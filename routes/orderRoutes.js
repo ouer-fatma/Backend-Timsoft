@@ -12,6 +12,10 @@ router.use(verifyToken);
 router.post('/bl/generate/:nature/:souche/:numero/:indice', orderController.createBonDeLivraisonSansLien);
 router.get('/bl', orderController.getBonsDeLivraison);
 router.put('/bl/:nature/:souche/:numero/:indice/pret', orderController.marquerBLCommePrepare);
+router.put('/:nature/:souche/:numero/:indice/expedie', checkRole('personnel_magasin'), orderController.marquerCommandeCommeExpediee);
+router.put('/:nature/:souche/:numero/:indice/livre', checkRole('personnel_magasin'), orderController.marquerCommandeCommeLivree);
+router.patch('/:nature/:souche/:numero/:indice/statut', orderController.marquerCommandeCommePrete);
+
 router.get('/test-bl', (req, res) => {
   res.send('Routes BL fonctionnent ✅');
 });
@@ -29,7 +33,14 @@ router.get('/details/CC/:souche/:numero/:indice', getReservationDetails);
 router.get('/commandes/:souche/:numero/depots-disponibles/:article', orderController.getDepotsDisponiblesPourArticleCommande);
 
 router.get('/magasinier/reservations',checkRole('personnel_magasin'), getReservationsPourMagasinier);
-router.get('/attente', orderController.getOrdersEnAttente);
+router.get('/ENR/livraison', orderController.getOrdersLivraisonEnregistres);
+router.get('/ENR/retrait', orderController.getOrdersRetraitEnregistres);
+router.get('/PRE', orderController.getOrdersPrepares);
+router.get('/EXP', orderController.getOrdersExpediees);
+router.get('/LIV', orderController.getOrdersLivrees);
+
+
+router.get('/search', orderController.getOrdersByNumeroOrTiers);
 router.get('/client/:codeTiers', orderController.getOrdersByCodeTiers);
 router.get('/next-numero', orderController.getNextOrderNumero);
 router.get('/details/:nature/:souche/:numero/:indice', orderController.getOrderDetails);
@@ -41,6 +52,7 @@ router.put('/:nature/:souche/:numero/:indice', orderController.updateOrder);
 router.put('/:nature/:souche/:numero/:indice/status', updateOrderStatus);
 
 router.delete('/:nature/:souche/:numero/:indice', orderController.deleteOrder);
-router.patch('/:nature/:souche/:numero/:indice/statut', orderController.marquerCommandeCommePrete);
+
+
 
 module.exports = router;
